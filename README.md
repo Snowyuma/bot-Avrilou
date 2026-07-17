@@ -48,4 +48,4 @@ Pour les images explicites, active également dans les paramètres de sécurité
 
 ## Hébergement Render
 
-Le fichier `render.yaml` décrit un Background Worker avec un disque persistant de 1 Go. Sur Render, crée un **Blueprint** depuis ce dépôt GitHub, saisis `DISCORD_TOKEN` et laisse `QUARANTINE_ROLE_ID` vide si tu n'utilises pas encore ce rôle. Le disque conserve les échéances des bannissements temporaires entre les redéploiements.
+Le fichier `render.yaml` décrit un Background Worker avec un disque persistant de 1 Go. Sur Render, crée un **Blueprint** depuis ce dépôt GitHub puis saisis `DISCORD_TOKEN`. Le disque conserve les échéances des bannissements temporaires entre les redéploiements.
