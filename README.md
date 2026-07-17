@@ -49,3 +49,7 @@ Pour les images explicites, active également dans les paramètres de sécurité
 ## Hébergement Render
 
 Le fichier `render.yaml` décrit un Background Worker avec un disque persistant de 1 Go. Sur Render, crée un **Blueprint** depuis ce dépôt GitHub puis saisis `DISCORD_TOKEN`. Le disque conserve les échéances des bannissements temporaires entre les redéploiements.
+
+## Déploiement sur un hébergeur à espace limité
+
+Le dossier `dist` compilé est versionné afin que l'hébergeur puisse installer uniquement les dépendances de production. Avant chaque publication d'une mise à jour, exécute `npm run build`, puis inclus `dist` dans le commit. La commande de démarrage hébergée recommandée est `npm install --omit=dev --no-audit --no-fund && npm run start:prod`.
