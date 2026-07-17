@@ -67,6 +67,8 @@ async function notifySanction(member, sanction, reason, duration) {
 async function handleCommand(interaction) {
     if (!interaction.guild)
         return interaction.reply({ content: "Commande utilisable uniquement sur un serveur.", ephemeral: true });
+    if (interaction.guild.id !== config.guildId)
+        return interaction.reply({ content: "Ce bot n'est pas configuré pour ce serveur.", ephemeral: true });
     if (interaction.commandName === "ban") {
         const user = interaction.options.getUser("membre", true);
         const reason = interaction.options.getString("raison") ?? `Banni par ${interaction.user.tag}`;
@@ -209,7 +211,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 client.on(Events.GuildMemberAdd, async (member) => {
-    if (!config.antiRaidEnabled)
+    if (!config.antiRaidEnabled || member.guild.id !== config.guildId)
         return;
     const now = Date.now();
     const joins = (recentJoins.get(member.guild.id) ?? []).filter((time) => now - time <= config.raidWindowMs);
@@ -226,7 +228,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
     }
 });
 client.on(Events.MessageCreate, async (message) => {
-    if (!message.guild || message.author.bot || !config.blockedWords.length)
+    if (!message.guild || message.guild.id !== config.guildId || message.author.bot || !config.blockedWords.length)
         return;
     if (message.member?.permissions.has(PermissionFlagsBits.ManageMessages))
         return;

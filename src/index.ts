@@ -78,6 +78,7 @@ async function notifySanction(
 
 async function handleCommand(interaction: ChatInputCommandInteraction) {
   if (!interaction.guild) return interaction.reply({ content: "Commande utilisable uniquement sur un serveur.", ephemeral: true });
+  if (interaction.guild.id !== config.guildId) return interaction.reply({ content: "Ce bot n'est pas configuré pour ce serveur.", ephemeral: true });
 
   if (interaction.commandName === "ban") {
     const user = interaction.options.getUser("membre", true);
@@ -209,7 +210,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
-  if (!config.antiRaidEnabled) return;
+  if (!config.antiRaidEnabled || member.guild.id !== config.guildId) return;
   const now = Date.now();
   const joins = (recentJoins.get(member.guild.id) ?? []).filter((time) => now - time <= config.raidWindowMs);
   joins.push(now);
@@ -228,7 +229,7 @@ client.on(Events.GuildMemberAdd, async (member) => {
 });
 
 client.on(Events.MessageCreate, async (message) => {
-  if (!message.guild || message.author.bot || !config.blockedWords.length) return;
+  if (!message.guild || message.guild.id !== config.guildId || message.author.bot || !config.blockedWords.length) return;
   if (message.member?.permissions.has(PermissionFlagsBits.ManageMessages)) return;
   const normalized = message.content.normalize("NFKC").toLocaleLowerCase("fr");
   const blockedWord = config.blockedWords.find((word) => normalized.includes(word));
