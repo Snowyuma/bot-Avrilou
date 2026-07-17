@@ -8,7 +8,6 @@ import {
   Guild,
   GuildMember,
   PermissionFlagsBits,
-  TextChannel,
 } from "discord.js";
 import { config } from "./config.js";
 import { formatDuration, parseDuration } from "./durations.js";
@@ -152,7 +151,9 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
   }
 
   if (interaction.commandName === "publier") {
-    if (interaction.channelId !== config.announcementChannelId) return interaction.reply({ content: `Cette commande est réservée au salon <#${config.announcementChannelId}>.`, ephemeral: true });
+    const selectedChannel = interaction.options.getChannel("salon");
+    const targetChannel = await interaction.guild.channels.fetch(selectedChannel?.id ?? interaction.channelId).catch(() => null);
+    if (!targetChannel?.isTextBased() || !("send" in targetChannel)) return interaction.reply({ content: "Le salon sélectionné ne permet pas l'envoi de messages.", ephemeral: true });
     const message = interaction.options.getString("message", true);
     const attachment = interaction.options.getAttachment("image");
     const urlInput = interaction.options.getString("image_url");
@@ -161,8 +162,8 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
     if (urlInput && !imageUrl) return interaction.reply({ content: "L'URL de l'image doit être une URL HTTPS valide.", ephemeral: true });
     const embed = new EmbedBuilder().setDescription(message).setColor(0x8b5cf6).setTimestamp();
     if (imageUrl) embed.setImage(imageUrl);
-    await (interaction.channel as TextChannel).send({ embeds: [embed] });
-    return interaction.reply({ content: "Annonce publiée.", ephemeral: true });
+    await targetChannel.send({ embeds: [embed] });
+    return interaction.reply({ content: `Annonce publiée dans <#${targetChannel.id}>.`, ephemeral: true });
   }
 
   if (interaction.commandName === "lockdown") {

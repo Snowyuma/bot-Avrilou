@@ -17,7 +17,7 @@ export const config = {
   token: required("DISCORD_TOKEN"),
   clientId: required("CLIENT_ID"),
   guildId: required("GUILD_ID"),
-  announcementChannelId: required("ANNOUNCEMENT_CHANNEL_ID"),
+  announcementChannelId: process.env.ANNOUNCEMENT_CHANNEL_ID?.trim(),
   modLogChannelId: process.env.MOD_LOG_CHANNEL_ID?.trim(),
   antiRaidEnabled: process.env.ANTI_RAID_ENABLED !== "false",
   raidJoinLimit: positiveNumber("RAID_JOIN_LIMIT", 8),

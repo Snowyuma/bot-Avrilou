@@ -147,8 +147,10 @@ async function handleCommand(interaction) {
         return log(interaction.guild, "Exclusion retirée", `${member.user.tag} (${member.id})\nMotif : ${reason}`, 0x22c55e);
     }
     if (interaction.commandName === "publier") {
-        if (interaction.channelId !== config.announcementChannelId)
-            return interaction.reply({ content: `Cette commande est réservée au salon <#${config.announcementChannelId}>.`, ephemeral: true });
+        const selectedChannel = interaction.options.getChannel("salon");
+        const targetChannel = await interaction.guild.channels.fetch(selectedChannel?.id ?? interaction.channelId).catch(() => null);
+        if (!targetChannel?.isTextBased() || !("send" in targetChannel))
+            return interaction.reply({ content: "Le salon sélectionné ne permet pas l'envoi de messages.", ephemeral: true });
         const message = interaction.options.getString("message", true);
         const attachment = interaction.options.getAttachment("image");
         const urlInput = interaction.options.getString("image_url");
@@ -160,8 +162,8 @@ async function handleCommand(interaction) {
         const embed = new EmbedBuilder().setDescription(message).setColor(0x8b5cf6).setTimestamp();
         if (imageUrl)
             embed.setImage(imageUrl);
-        await interaction.channel.send({ embeds: [embed] });
-        return interaction.reply({ content: "Annonce publiée.", ephemeral: true });
+        await targetChannel.send({ embeds: [embed] });
+        return interaction.reply({ content: `Annonce publiée dans <#${targetChannel.id}>.`, ephemeral: true });
     }
     if (interaction.commandName === "lockdown") {
         await interaction.deferReply({ ephemeral: true });
