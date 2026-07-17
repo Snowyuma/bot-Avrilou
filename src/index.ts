@@ -154,6 +154,10 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
   if (interaction.commandName === "publier") {
     const selectedChannel = interaction.options.getChannel("salon");
     const targetChannel = await interaction.guild.channels.fetch(selectedChannel?.id ?? interaction.channelId).catch(() => null);
+    if (!targetChannel || !config.announcementChannelIds.includes(targetChannel.id)) {
+      const allowed = config.announcementChannelIds.map((id) => `<#${id}>`).join(", ");
+      return interaction.reply({ content: `Ce salon n'est pas autorisé pour les publications.${allowed ? ` Salons autorisés : ${allowed}.` : ""}`, ephemeral: true });
+    }
     if (!targetChannel?.isTextBased() || !("send" in targetChannel)) return interaction.reply({ content: "Le salon sélectionné ne permet pas l'envoi de messages.", ephemeral: true });
     const message = interaction.options.getString("message", true);
     const attachment = interaction.options.getAttachment("image");
