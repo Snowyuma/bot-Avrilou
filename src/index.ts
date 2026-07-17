@@ -15,7 +15,12 @@ import { formatDuration, parseDuration } from "./durations.js";
 import { cancelScheduledBan, loadScheduledBans, scheduleBan, takeExpiredBans } from "./scheduled-bans.js";
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+  ],
 });
 
 const recentJoins = new Map<string, number[]>();
@@ -49,6 +54,29 @@ function safeHttpsUrl(value: string | null): string | undefined {
   } catch { return undefined; }
 }
 
+async function notifySanction(
+  member: GuildMember,
+  sanction: string,
+  reason: string,
+  duration?: string,
+): Promise<{ sent: boolean; error?: string }> {
+  const lines = [
+    `Tu as reçu une sanction sur **${member.guild.name}**.`,
+    `Sanction : **${sanction}**`,
+    `Raison : **${reason}**`,
+  ];
+  if (duration) lines.push(`Durée : **${duration}**`);
+  lines.push("Si tu penses qu'il s'agit d'une erreur, contacte l'équipe de modération du serveur.");
+  try {
+    await member.user.send({ embeds: [new EmbedBuilder().setTitle("Notification de modération").setDescription(lines.join("\n")).setColor(0xef4444).setTimestamp()] });
+    return { sent: true };
+  } catch (error) {
+    const code = typeof error === "object" && error && "code" in error ? String(error.code) : undefined;
+    console.error(`Impossible d'envoyer un MP à ${member.user.tag}${code ? ` (code Discord ${code})` : ""}.`);
+    return { sent: false, error: code };
+  }
+}
+
 async function handleCommand(interaction: ChatInputCommandInteraction) {
   if (!interaction.guild) return interaction.reply({ content: "Commande utilisable uniquement sur un serveur.", ephemeral: true });
 
@@ -61,12 +89,22 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
     if (durationInput && !duration) return interaction.reply({ content: "Durée invalide. Utilise par exemple `30m`, `12h` ou `7j`.", ephemeral: true });
     const member = await interaction.guild.members.fetch(user.id).catch(() => null);
     if (member && !member.bannable) return interaction.reply({ content: "Je ne peux pas bannir ce membre (rôle trop élevé ou permission manquante).", ephemeral: true });
+    const durationLabel = duration ? formatDuration(duration) : "permanent";
+    const dmResult = member ? await notifySanction(member, "Bannissement", reason, durationLabel) : { sent: false };
     await interaction.guild.members.ban(user, { reason, deleteMessageSeconds: hours * 3600 });
     if (duration) await scheduleBan({ guildId: interaction.guild.id, userId: user.id, expiresAt: Date.now() + duration });
     else await cancelScheduledBan(interaction.guild.id, user.id);
-    const durationLabel = duration ? formatDuration(duration) : "permanent";
-    await interaction.reply({ content: `🔨 **${user.tag}** a été banni (${durationLabel}).`, ephemeral: true });
-    return log(interaction.guild, "Membre banni", `${user.tag} (${user.id})\nDurée : ${durationLabel}\nMotif : ${reason}`, 0xef4444);
+    await interaction.reply({ content: `🔨 **${user.tag}** a été banni (${durationLabel}). Message privé : ${dmResult.sent ? "envoyé" : "refusé par Discord"}.`, ephemeral: true });
+    return log(interaction.guild, "Membre banni", `${user.tag} (${user.id})\nDurée : ${durationLabel}\nMotif : ${reason}\nMessage privé : ${dmResult.sent ? "envoyé" : "non envoyé"}`, 0xef4444);
+  }
+
+  if (interaction.commandName === "testmp") {
+    const member = interaction.options.getMember("membre") as GuildMember | null;
+    if (!member) return interaction.reply({ content: "Ce membre est introuvable sur le serveur.", ephemeral: true });
+    await interaction.deferReply({ ephemeral: true });
+    const result = await notifySanction(member, "Test de message privé", "Ceci est un test, aucune sanction n'a été appliquée.");
+    if (result.sent) return interaction.editReply(`✅ Le message privé a bien été envoyé à **${member.user.tag}**.`);
+    return interaction.editReply(`❌ Discord a refusé le message privé à **${member.user.tag}**${result.error ? ` (code ${result.error})` : ""}. La personne doit autoriser les MP des membres du serveur et ne pas avoir bloqué le bot.`);
   }
 
   if (interaction.commandName === "unban") {
@@ -186,6 +224,20 @@ client.on(Events.GuildMemberAdd, async (member) => {
     const count = await setLockdown(member.guild, true);
     await log(member.guild, "🚨 Raid potentiel détecté", `${joins.length} arrivées en ${config.raidWindowMs / 1000}s. Lockdown automatique activé sur ${count} salons.`, 0xdc2626);
   }
+});
+
+client.on(Events.MessageCreate, async (message) => {
+  if (!message.guild || message.author.bot || !config.blockedWords.length) return;
+  if (message.member?.permissions.has(PermissionFlagsBits.ManageMessages)) return;
+  const normalized = message.content.normalize("NFKC").toLocaleLowerCase("fr");
+  const blockedWord = config.blockedWords.find((word) => normalized.includes(word));
+  if (!blockedWord) return;
+
+  const preview = message.content.length > 300 ? `${message.content.slice(0, 300)}…` : message.content;
+  await message.delete().catch(() => undefined);
+  const warning = await message.channel.send(`${message.author}, ton message a été supprimé car il contient un terme interdit.`).catch(() => null);
+  if (warning) setTimeout(() => warning.delete().catch(() => undefined), 8_000);
+  await log(message.guild, "Message supprimé par l'AutoMod", `Auteur : ${message.author.tag} (${message.author.id})\nSalon : <#${message.channelId}>\nTerme détecté : ||${blockedWord}||\nMessage : ||${preview || "(vide)"}||`, 0xef4444);
 });
 
 process.on("unhandledRejection", console.error);

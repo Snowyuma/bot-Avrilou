@@ -24,4 +24,8 @@ export const config = {
   raidWindowMs: positiveNumber("RAID_WINDOW_SECONDS", 15) * 1000,
   minAccountAgeMs: positiveNumber("MIN_ACCOUNT_AGE_HOURS", 24) * 3_600_000,
   quarantineRoleId: process.env.QUARANTINE_ROLE_ID?.trim(),
+  blockedWords: (process.env.BLOCKED_WORDS ?? "")
+    .split(",")
+    .map((word) => word.trim().toLocaleLowerCase("fr"))
+    .filter(Boolean),
 };

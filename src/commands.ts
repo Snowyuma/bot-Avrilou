@@ -20,6 +20,11 @@ export const commands = [
     .addStringOption((o) => o.setName("raison").setDescription("Motif du débannissement").setMaxLength(512))
     .setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
   new SlashCommandBuilder()
+    .setName("testmp")
+    .setDescription("Teste l'envoi d'un message privé de modération sans sanctionner")
+    .addUserOption((o) => o.setName("membre").setDescription("Membre qui recevra le message").setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  new SlashCommandBuilder()
     .setName("expulser")
     .setDescription("Expulse un membre du serveur")
     .addUserOption((o) => o.setName("membre").setDescription("Membre à expulser").setRequired(true))
