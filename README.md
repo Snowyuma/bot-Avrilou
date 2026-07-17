@@ -45,3 +45,7 @@ Le lockdown automatique retire temporairement à `@everyone` le droit d'envoyer 
 Important : aucun anti-raid automatique n'est infaillible. Conserve le niveau de vérification Discord, l'AutoMod natif et l'authentification à deux facteurs pour les modérateurs.
 
 Pour les images explicites, active également dans les paramètres de sécurité du serveur le filtre de médias explicites de Discord. Le bot ne prétend pas analyser visuellement les images sans service spécialisé d'analyse d'images.
+
+## Hébergement Render
+
+Le fichier `render.yaml` décrit un Background Worker avec un disque persistant de 1 Go. Sur Render, crée un **Blueprint** depuis ce dépôt GitHub, saisis `DISCORD_TOKEN` et laisse `QUARANTINE_ROLE_ID` vide si tu n'utilises pas encore ce rôle. Le disque conserve les échéances des bannissements temporaires entre les redéploiements.

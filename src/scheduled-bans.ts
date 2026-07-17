@@ -1,7 +1,8 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 export type ScheduledBan = { guildId: string; userId: string; expiresAt: number };
-const file = new URL("../scheduled-bans.json", import.meta.url);
+const file = resolve(process.env.DATA_DIR?.trim() || ".", "scheduled-bans.json");
 let bans: ScheduledBan[] = [];
 
 export async function loadScheduledBans() {
@@ -10,6 +11,7 @@ export async function loadScheduledBans() {
 }
 
 async function save() {
+  await mkdir(dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify(bans, null, 2), "utf8");
 }
 

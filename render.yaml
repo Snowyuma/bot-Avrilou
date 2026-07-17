@@ -1,0 +1,38 @@
+services:
+  - type: worker
+    name: avrilou-bot
+    runtime: node
+    buildCommand: npm ci && npm run build
+    startCommand: npm run start:prod
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 24.16.0
+      - key: DATA_DIR
+        value: /var/data
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        value: "1527620499042205757"
+      - key: GUILD_ID
+        value: "1527624956882714715"
+      - key: ANNOUNCEMENT_CHANNEL_ID
+        value: "1527624958082158655"
+      - key: MOD_LOG_CHANNEL_ID
+        value: "1527625712985575486"
+      - key: ANTI_RAID_ENABLED
+        value: "true"
+      - key: RAID_JOIN_LIMIT
+        value: "8"
+      - key: RAID_WINDOW_SECONDS
+        value: "15"
+      - key: MIN_ACCOUNT_AGE_HOURS
+        value: "24"
+      - key: QUARANTINE_ROLE_ID
+        sync: false
+      - key: BLOCKED_WORDS
+        value: "hitler,antoine daniel,sardoche,discord.gg,yumyum"
+    disk:
+      name: avrilou-data
+      mountPath: /var/data
+      sizeGB: 1
