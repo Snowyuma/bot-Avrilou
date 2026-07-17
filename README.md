@@ -11,6 +11,7 @@ Bot Discord de modération avec commandes slash, annonces illustrées et protect
 - `/exclu` : exclusion temporaire des discussions (timeout Discord, maximum 28 jours).
 - `/unexclu` : retrait anticipé d'une exclusion temporaire.
 - `/publier` : annonce envoyée par le bot dans l'un des salons autorisés par `ANNOUNCEMENT_CHANNEL_IDS`, avec image jointe ou URL HTTPS.
+  Le salon `MOD_LOG_CHANNEL_ID` est également autorisé automatiquement afin de faciliter les tests de modération.
 - `/lockdown` : verrouillage/déverrouillage des salons texte.
 - `/antiraid` : état de la protection.
 - Menu clic droit sur un membre → **Applications → Informations du compte**.
