@@ -23,7 +23,7 @@ export const commands = [
         .setName("mp")
         .setDescription("Envoie un message privé à un membre sous l'identité du bot")
         .addUserOption((o) => o.setName("membre").setDescription("Membre qui recevra le message").setRequired(true))
-        .addStringOption((o) => o.setName("message").setDescription("Message privé à envoyer").setRequired(true).setMaxLength(4000))
+        .addStringOption((o) => o.setName("message").setDescription("Message privé à envoyer").setRequired(true).setMaxLength(2000))
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
     new SlashCommandBuilder()
         .setName("avertissement")
@@ -53,7 +53,7 @@ export const commands = [
     new SlashCommandBuilder()
         .setName("publier")
         .setDescription("Publie une annonce sous l'identité du bot")
-        .addStringOption((o) => o.setName("message").setDescription("Contenu de l'annonce").setRequired(true).setMaxLength(4000))
+        .addStringOption((o) => o.setName("message").setDescription("Contenu de l'annonce").setRequired(true).setMaxLength(2000))
         .addChannelOption((o) => o.setName("salon").setDescription("Salon cible (par défaut : salon actuel)")
         .addChannelTypes(0, 5))
         .addAttachmentOption((o) => o.setName("image").setDescription("Image jointe à l'annonce"))

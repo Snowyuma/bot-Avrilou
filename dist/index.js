@@ -112,15 +112,7 @@ async function handleCommand(interaction) {
             return interaction.reply({ content: "Ce membre est introuvable sur le serveur.", ephemeral: true });
         await interaction.deferReply({ ephemeral: true });
         try {
-            await user.send({
-                embeds: [
-                    new EmbedBuilder()
-                        .setTitle(`Message de l'équipe de ${interaction.guild.name}`)
-                        .setDescription(message)
-                        .setColor(0x8b5cf6)
-                        .setTimestamp(),
-                ],
-            });
+            await user.send(message);
             const loggedMessage = message.length > 3200 ? `${message.slice(0, 3200)}…` : message;
             await log(interaction.guild, `Message privé envoyé à ${user.tag}`, `Destinataire : ${user} (${user.id})\nEnvoyé par : ${interaction.user} (${interaction.user.id})\nMessage : ${loggedMessage}`, 0x8b5cf6);
             return interaction.editReply(`✉️ Le message privé a bien été envoyé à **${user.tag}**.`);
@@ -212,10 +204,10 @@ async function handleCommand(interaction) {
         const imageUrl = attachment?.url ?? safeHttpsUrl(urlInput);
         if (urlInput && !imageUrl)
             return interaction.reply({ content: "L'URL de l'image doit être une URL HTTPS valide.", ephemeral: true });
-        const embed = new EmbedBuilder().setDescription(message).setColor(0x8b5cf6).setTimestamp();
-        if (imageUrl)
-            embed.setImage(imageUrl);
-        await targetChannel.send({ embeds: [embed] });
+        await targetChannel.send({
+            content: message,
+            files: imageUrl ? [imageUrl] : [],
+        });
         return interaction.reply({ content: `Annonce publiée dans <#${targetChannel.id}>.`, ephemeral: true });
     }
     if (interaction.commandName === "lockdown") {

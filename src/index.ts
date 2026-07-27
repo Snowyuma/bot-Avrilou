@@ -118,15 +118,7 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
 
     await interaction.deferReply({ ephemeral: true });
     try {
-      await user.send({
-        embeds: [
-          new EmbedBuilder()
-            .setTitle(`Message de l'équipe de ${interaction.guild.name}`)
-            .setDescription(message)
-            .setColor(0x8b5cf6)
-            .setTimestamp(),
-        ],
-      });
+      await user.send(message);
       const loggedMessage = message.length > 3200 ? `${message.slice(0, 3200)}…` : message;
       await log(
         interaction.guild,
@@ -225,9 +217,10 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
     if (attachment && !attachment.contentType?.startsWith("image/")) return interaction.reply({ content: "Le fichier joint doit être une image.", ephemeral: true });
     const imageUrl = attachment?.url ?? safeHttpsUrl(urlInput);
     if (urlInput && !imageUrl) return interaction.reply({ content: "L'URL de l'image doit être une URL HTTPS valide.", ephemeral: true });
-    const embed = new EmbedBuilder().setDescription(message).setColor(0x8b5cf6).setTimestamp();
-    if (imageUrl) embed.setImage(imageUrl);
-    await targetChannel.send({ embeds: [embed] });
+    await targetChannel.send({
+      content: message,
+      files: imageUrl ? [imageUrl] : [],
+    });
     return interaction.reply({ content: `Annonce publiée dans <#${targetChannel.id}>.`, ephemeral: true });
   }
 
