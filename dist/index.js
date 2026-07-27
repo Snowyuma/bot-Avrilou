@@ -294,6 +294,9 @@ client.on(Events.MessageCreate, async (message) => {
             await message.react(heart).catch((error) => console.error(`Impossible de réagir avec ${heart} au message « Micode » :`, error));
         }
     }
+    if (normalized.includes("davinci") || normalized.includes("da vinci")) {
+        await message.reply("Non, adobe est mieux").catch((error) => console.error("Impossible de répondre au message parlant de DaVinci :", error));
+    }
     if (!config.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages))
         return;
     const blockedWord = config.blockedWords.find((word) => normalized.includes(word));
