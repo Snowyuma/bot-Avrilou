@@ -56,6 +56,7 @@ export const commands = [
         .addStringOption((o) => o.setName("message").setDescription("Contenu de l'annonce").setRequired(true).setMaxLength(2000))
         .addChannelOption((o) => o.setName("salon").setDescription("Salon cible (par défaut : salon actuel)")
         .addChannelTypes(0, 5))
+        .addStringOption((o) => o.setName("message_id").setDescription("ID du message auquel le bot doit répondre"))
         .addAttachmentOption((o) => o.setName("image").setDescription("Image jointe à l'annonce"))
         .addStringOption((o) => o.setName("image_url").setDescription("URL HTTPS d'une image"))
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),

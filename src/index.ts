@@ -212,16 +212,28 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
     }
     if (!targetChannel?.isTextBased() || !("send" in targetChannel)) return interaction.reply({ content: "Le salon sélectionné ne permet pas l'envoi de messages.", ephemeral: true });
     const message = interaction.options.getString("message", true);
+    const replyToMessageId = interaction.options.getString("message_id")?.trim();
     const attachment = interaction.options.getAttachment("image");
     const urlInput = interaction.options.getString("image_url");
+    if (replyToMessageId && !/^\d{17,20}$/.test(replyToMessageId)) {
+      return interaction.reply({ content: "L'identifiant du message est invalide. Active le mode développeur Discord, puis utilise « Copier l'identifiant du message ».", ephemeral: true });
+    }
     if (attachment && !attachment.contentType?.startsWith("image/")) return interaction.reply({ content: "Le fichier joint doit être une image.", ephemeral: true });
     const imageUrl = attachment?.url ?? safeHttpsUrl(urlInput);
     if (urlInput && !imageUrl) return interaction.reply({ content: "L'URL de l'image doit être une URL HTTPS valide.", ephemeral: true });
-    await targetChannel.send({
+    const payload = {
       content: message,
       files: imageUrl ? [imageUrl] : [],
-    });
-    return interaction.reply({ content: `Annonce publiée dans <#${targetChannel.id}>.`, ephemeral: true });
+    };
+    if (replyToMessageId) {
+      if (!("messages" in targetChannel)) return interaction.reply({ content: "Ce salon ne permet pas de répondre à un message.", ephemeral: true });
+      const targetMessage = await targetChannel.messages.fetch(replyToMessageId).catch(() => null);
+      if (!targetMessage) return interaction.reply({ content: "Message introuvable dans le salon sélectionné. Vérifie le salon et l'identifiant.", ephemeral: true });
+      await targetMessage.reply(payload);
+      return interaction.reply({ content: `Réponse publiée dans <#${targetChannel.id}>.`, ephemeral: true });
+    }
+    await targetChannel.send(payload);
+    return interaction.reply({ content: `Message publié dans <#${targetChannel.id}>.`, ephemeral: true });
   }
 
   if (interaction.commandName === "lockdown") {
