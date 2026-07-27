@@ -107,6 +107,65 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
     return interaction.editReply(`❌ Discord a refusé le message privé à **${member.user.tag}**${result.error ? ` (code ${result.error})` : ""}. La personne doit autoriser les MP des membres du serveur et ne pas avoir bloqué le bot.`);
   }
 
+  if (interaction.commandName === "mp") {
+    const user = interaction.options.getUser("membre", true);
+    const message = interaction.options.getString("message", true).trim();
+    if (user.bot) return interaction.reply({ content: "Tu ne peux pas envoyer ce message privé à un bot.", ephemeral: true });
+    if (!message) return interaction.reply({ content: "Le message privé ne peut pas être vide.", ephemeral: true });
+
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    if (!member) return interaction.reply({ content: "Ce membre est introuvable sur le serveur.", ephemeral: true });
+
+    await interaction.deferReply({ ephemeral: true });
+    try {
+      await user.send({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle(`Message de l'équipe de ${interaction.guild.name}`)
+            .setDescription(message)
+            .setColor(0x8b5cf6)
+            .setTimestamp(),
+        ],
+      });
+      const loggedMessage = message.length > 3200 ? `${message.slice(0, 3200)}…` : message;
+      await log(
+        interaction.guild,
+        `Message privé envoyé à ${user.tag}`,
+        `Destinataire : ${user} (${user.id})\nEnvoyé par : ${interaction.user} (${interaction.user.id})\nMessage : ${loggedMessage}`,
+        0x8b5cf6,
+      );
+      return interaction.editReply(`✉️ Le message privé a bien été envoyé à **${user.tag}**.`);
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error ? String(error.code) : undefined;
+      console.error(`Impossible d'envoyer un MP à ${user.tag}${code ? ` (code Discord ${code})` : ""}.`);
+      return interaction.editReply(
+        `❌ Discord a refusé le message privé à **${user.tag}**${code ? ` (code ${code})` : ""}. La personne doit autoriser les MP des membres du serveur et ne pas avoir bloqué le bot.`,
+      );
+    }
+  }
+
+  if (interaction.commandName === "avertissement") {
+    const user = interaction.options.getUser("membre", true);
+    const reason = interaction.options.getString("raison", true).trim();
+    if (user.bot) return interaction.reply({ content: "Tu ne peux pas donner un avertissement à un bot.", ephemeral: true });
+    if (user.id === interaction.user.id) return interaction.reply({ content: "Tu ne peux pas te donner un avertissement à toi-même.", ephemeral: true });
+
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    if (!member) return interaction.reply({ content: "Ce membre est introuvable sur le serveur.", ephemeral: true });
+
+    await interaction.deferReply({ ephemeral: true });
+    const dmResult = await notifySanction(member, "Avertissement", reason);
+    await log(
+      interaction.guild,
+      `Avertissement pour ${user.tag}`,
+      `Membre : ${user} (${user.id})\nModérateur : ${interaction.user} (${interaction.user.id})\nRaison : ${reason}\nMessage privé : ${dmResult.sent ? "envoyé" : "non envoyé"}`,
+      0xf59e0b,
+    );
+    return interaction.editReply(
+      `⚠️ Avertissement enregistré pour **${user.tag}**. Message privé : ${dmResult.sent ? "envoyé" : "non envoyé (MP fermés ou bot bloqué)"}.`,
+    );
+  }
+
   if (interaction.commandName === "unban") {
     const userId = interaction.options.getString("utilisateur_id", true).trim();
     const reason = interaction.options.getString("raison") ?? `Débanni par ${interaction.user.tag}`;
@@ -234,9 +293,14 @@ client.on(Events.GuildMemberAdd, async (member) => {
 });
 
 client.on(Events.MessageCreate, async (message) => {
-  if (!message.guild || message.guild.id !== config.guildId || message.author.bot || !config.blockedWords.length) return;
-  if (message.member?.permissions.has(PermissionFlagsBits.ManageMessages)) return;
+  if (!message.guild || message.guild.id !== config.guildId || message.author.bot) return;
+
   const normalized = message.content.normalize("NFKC").toLocaleLowerCase("fr");
+  if (normalized.trim() === "coucou") {
+    await message.react("🖕").catch((error) => console.error("Impossible de réagir au message « coucou » :", error));
+  }
+
+  if (!config.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages)) return;
   const blockedWord = config.blockedWords.find((word) => normalized.includes(word));
   if (!blockedWord) return;
 

@@ -25,6 +25,18 @@ export const commands = [
     .addUserOption((o) => o.setName("membre").setDescription("Membre qui recevra le message").setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
   new SlashCommandBuilder()
+    .setName("mp")
+    .setDescription("Envoie un message privé à un membre sous l'identité du bot")
+    .addUserOption((o) => o.setName("membre").setDescription("Membre qui recevra le message").setRequired(true))
+    .addStringOption((o) => o.setName("message").setDescription("Message privé à envoyer").setRequired(true).setMaxLength(4000))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  new SlashCommandBuilder()
+    .setName("avertissement")
+    .setDescription("Donne un avertissement à un membre et l'en informe par message privé")
+    .addUserOption((o) => o.setName("membre").setDescription("Membre à avertir").setRequired(true))
+    .addStringOption((o) => o.setName("raison").setDescription("Raison de l'avertissement").setRequired(true).setMaxLength(512))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  new SlashCommandBuilder()
     .setName("expulser")
     .setDescription("Expulse un membre du serveur")
     .addUserOption((o) => o.setName("membre").setDescription("Membre à expulser").setRequired(true))
