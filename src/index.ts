@@ -10,6 +10,7 @@ import {
   PermissionFlagsBits,
 } from "discord.js";
 import { config } from "./config.js";
+import { getDueBirthdays, loadBirthdays, markBirthdayCelebrated, saveBirthday } from "./birthdays.js";
 import { formatDuration, parseDuration } from "./durations.js";
 import { cancelScheduledBan, loadScheduledBans, scheduleBan, takeExpiredBans } from "./scheduled-bans.js";
 
@@ -24,6 +25,96 @@ const client = new Client({
 
 const recentJoins = new Map<string, number[]>();
 const lockedGuilds = new Set<string>();
+
+const chatReplies = {
+  greetings: [
+    "Salut ! Comment ça va ?",
+    "Coucou ! Tu voulais me parler ?",
+    "Bonjour humain, je suis tout ouïe.",
+    "Salut ! J'espère que ta journée se passe bien.",
+  ],
+  wellbeing: [
+    "Ça va très bien, mes circuits sont de bonne humeur.",
+    "Impeccable ! Aucun bug à signaler… pour le moment.",
+    "Ça roule, merci ! Et toi ?",
+    "Toujours en ligne, donc plutôt bien.",
+  ],
+  activity: [
+    "Je surveille le serveur en faisant semblant d'être très occupé.",
+    "J'attends qu'on me donne du travail… ou une part de pizza.",
+    "Je compte les messages. J'en étais à beaucoup.",
+    "Je médite sur la différence entre un bug et une fonctionnalité.",
+  ],
+  thanks: [
+    "Avec plaisir !",
+    "De rien, c'est mon métier numérique.",
+    "Toujours là pour aider !",
+    "Pas de souci !",
+  ],
+  jokes: [
+    "Toto demande à sa maîtresse : « On peut être puni pour quelque chose qu'on n'a pas fait ? » Elle répond non. Toto dit : « Super, je n'ai pas fait mes devoirs ! »",
+    "Pourquoi Toto met-il son réveil dans le réfrigérateur ? Pour se lever de bonne heure… bien fraîche.",
+    "La maîtresse demande à Toto de conjuguer « marcher ». Toto répond : « Je marche, tu marches… » Elle dit : « Plus vite ! » Toto répond : « Je cours, tu cours… »",
+    "Pourquoi les plongeurs plongent-ils toujours en arrière ? Parce que sinon ils tombent dans le bateau.",
+    "Quel est le comble pour un électricien ? De ne pas être au courant.",
+    "Que dit une imprimante dans l'eau ? J'ai papier.",
+  ],
+};
+
+function randomReply(replies: string[]): string {
+  return replies[Math.floor(Math.random() * replies.length)]!;
+}
+
+function getMentionReply(content: string, botId: string): string {
+  const text = content
+    .replace(new RegExp(`<@!?${botId}>`, "g"), " ")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase("fr")
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (/\b(blague|vanne|rire|rigoler)\b/.test(text)) return randomReply(chatReplies.jokes);
+  if (/\b(ca va|comment vas tu|comment tu vas|tu vas bien)\b/.test(text)) return randomReply(chatReplies.wellbeing);
+  if (/\b(tu fais quoi|que fais tu|qu est ce que tu fais|quoi de neuf)\b/.test(text)) return randomReply(chatReplies.activity);
+  if (/\b(merci|thanks)\b/.test(text)) return randomReply(chatReplies.thanks);
+  if (!text || /\b(salut|bonjour|bonsoir|coucou|hello|hey)\b/.test(text)) return randomReply(chatReplies.greetings);
+  if (/\b(qui es tu|t es qui|ton nom)\b/.test(text)) return "Je suis Avrilou Bot, gardien du serveur et raconteur officiel de blagues nulles.";
+  return "Je n'ai pas encore compris cette question, mais tu peux me demander comment je vais, ce que je fais ou une petite vanne.";
+}
+
+function currentParisDate(): { day: number; month: number; year: number } {
+  const parts = new Intl.DateTimeFormat("fr-FR", {
+    timeZone: "Europe/Paris",
+    day: "numeric",
+    month: "numeric",
+    year: "numeric",
+  }).formatToParts(new Date());
+  const value = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((part) => part.type === type)?.value);
+  return { day: value("day"), month: value("month"), year: value("year") };
+}
+
+async function celebrateBirthdays() {
+  const guild = client.guilds.cache.get(config.guildId);
+  if (!guild) return;
+  const channel = await guild.channels.fetch(config.birthdayChannelId).catch(() => null);
+  if (!channel?.isTextBased() || !("send" in channel)) return;
+
+  const { day, month, year } = currentParisDate();
+  for (const birthday of getDueBirthdays(guild.id, day, month, year)) {
+    const member = await guild.members.fetch(birthday.userId).catch(() => null);
+    if (!member) continue;
+    const sent = await channel.send({
+      content: `🎂 Joyeux anniversaire ${member} ! Toute l'équipe te souhaite une excellente journée ! 🎉`,
+      allowedMentions: { users: [member.id] },
+    }).then(() => true).catch((error) => {
+      console.error(`Impossible de souhaiter l'anniversaire de ${member.user.tag} :`, error);
+      return false;
+    });
+    if (sent) await markBirthdayCelebrated(guild.id, member.id, year);
+  }
+}
 
 async function log(guild: Guild, title: string, description: string, color = 0xf59e0b) {
   if (!config.modLogChannelId) return;
@@ -202,6 +293,34 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
     return log(interaction.guild, "Exclusion retirée", `${member.user.tag} (${member.id})\nMotif : ${reason}`, 0x22c55e);
   }
 
+  if (interaction.commandName === "creationanniv") {
+    if (interaction.channelId !== config.birthdayRegistrationChannelId) {
+      return interaction.reply({
+        content: `Cette commande est utilisable uniquement dans <#${config.birthdayRegistrationChannelId}>.`,
+        ephemeral: true,
+      });
+    }
+    const user = interaction.options.getUser("membre", true);
+    const dateInput = interaction.options.getString("date", true).trim();
+    if (user.bot) return interaction.reply({ content: "Tu ne peux pas enregistrer l'anniversaire d'un bot.", ephemeral: true });
+
+    const match = /^(\d{1,2})\/(\d{1,2})$/.exec(dateInput);
+    if (!match) return interaction.reply({ content: "Date invalide. Utilise le format `JJ/MM`, par exemple `24/12`.", ephemeral: true });
+    const day = Number(match[1]);
+    const month = Number(match[2]);
+    const testDate = new Date(Date.UTC(2000, month - 1, day));
+    if (testDate.getUTCDate() !== day || testDate.getUTCMonth() !== month - 1) {
+      return interaction.reply({ content: "Cette date n'existe pas. Vérifie le jour et le mois.", ephemeral: true });
+    }
+
+    const member = await interaction.guild.members.fetch(user.id).catch(() => null);
+    if (!member) return interaction.reply({ content: "Ce membre est introuvable sur le serveur.", ephemeral: true });
+    await saveBirthday({ guildId: interaction.guild.id, userId: user.id, day, month });
+    const formattedDate = `${String(day).padStart(2, "0")}/${String(month).padStart(2, "0")}`;
+    await interaction.reply({ content: `🎂 Anniversaire de **${user.tag}** enregistré pour le **${formattedDate}**.`, ephemeral: true });
+    return log(interaction.guild, "Anniversaire enregistré", `${user.tag} (${user.id})\nDate : ${formattedDate}\nEnregistré par : ${interaction.user.tag}`, 0xec4899);
+  }
+
   if (interaction.commandName === "publier") {
     const selectedChannel = interaction.options.getChannel("salon");
     const targetChannel = await interaction.guild.channels.fetch(selectedChannel?.id ?? interaction.channelId).catch(() => null);
@@ -251,7 +370,10 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
 
 client.once(Events.ClientReady, async (ready) => {
   await loadScheduledBans();
+  await loadBirthdays();
   console.log(`Connecté en tant que ${ready.user.tag}.`);
+  await celebrateBirthdays();
+  setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
   setInterval(async () => {
     for (const ban of await takeExpiredBans()) {
       const guild = ready.guilds.cache.get(ban.guildId);
@@ -315,6 +437,10 @@ client.on(Events.MessageCreate, async (message) => {
   }
   if (normalized.includes("davinci") || normalized.includes("da vinci")) {
     await message.reply("Non, adobe est mieux").catch((error) => console.error("Impossible de répondre au message parlant de DaVinci :", error));
+  }
+  if (client.user && message.mentions.users.has(client.user.id)) {
+    const reply = getMentionReply(message.content, client.user.id);
+    await message.reply(reply).catch((error) => console.error("Impossible de répondre à la mention du bot :", error));
   }
 
   if (!config.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages)) return;

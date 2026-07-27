@@ -21,6 +21,8 @@ export const config = {
         .map((id) => id.trim())
         .filter(Boolean),
     modLogChannelId: process.env.MOD_LOG_CHANNEL_ID?.trim(),
+    birthdayChannelId: process.env.BIRTHDAY_CHANNEL_ID?.trim() || "1289751044301000714",
+    birthdayRegistrationChannelId: process.env.BIRTHDAY_REGISTRATION_CHANNEL_ID?.trim() || "1531342839638786068",
     antiRaidEnabled: process.env.ANTI_RAID_ENABLED !== "false",
     raidJoinLimit: positiveNumber("RAID_JOIN_LIMIT", 8),
     raidWindowMs: positiveNumber("RAID_WINDOW_SECONDS", 15) * 1000,

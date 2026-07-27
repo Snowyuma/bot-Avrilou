@@ -37,6 +37,12 @@ export const commands = [
     .addStringOption((o) => o.setName("raison").setDescription("Raison de l'avertissement").setRequired(true).setMaxLength(512))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
   new SlashCommandBuilder()
+    .setName("creationanniv")
+    .setDescription("Enregistre la date d'anniversaire d'un membre")
+    .addUserOption((o) => o.setName("membre").setDescription("Membre à qui souhaiter son anniversaire").setRequired(true))
+    .addStringOption((o) => o.setName("date").setDescription("Date au format JJ/MM, par exemple 24/12").setRequired(true).setMaxLength(5))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  new SlashCommandBuilder()
     .setName("expulser")
     .setDescription("Expulse un membre du serveur")
     .addUserOption((o) => o.setName("membre").setDescription("Membre à expulser").setRequired(true))
