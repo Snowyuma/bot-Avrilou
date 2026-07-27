@@ -299,6 +299,9 @@ client.on(Events.MessageCreate, async (message) => {
   if (normalized.trim() === "coucou") {
     await message.react("🖕").catch((error) => console.error("Impossible de réagir au message « coucou » :", error));
   }
+  if (normalized.trim() === "pieds") {
+    await message.react("👃").catch((error) => console.error("Impossible de réagir au message « pieds » :", error));
+  }
 
   if (!config.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages)) return;
   const blockedWord = config.blockedWords.find((word) => normalized.includes(word));
