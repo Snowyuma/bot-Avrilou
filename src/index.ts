@@ -302,6 +302,12 @@ client.on(Events.MessageCreate, async (message) => {
   if (normalized.trim() === "pieds") {
     await message.react("👃").catch((error) => console.error("Impossible de réagir au message « pieds » :", error));
   }
+  if (normalized.trim() === "micode") {
+    const hearts = ["❤️", "🧡", "💛", "💚", "💙", "💜", "🤎", "🖤", "🤍", "🩷", "🩵", "🩶"];
+    for (const heart of hearts) {
+      await message.react(heart).catch((error) => console.error(`Impossible de réagir avec ${heart} au message « Micode » :`, error));
+    }
+  }
 
   if (!config.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages)) return;
   const blockedWord = config.blockedWords.find((word) => normalized.includes(word));
