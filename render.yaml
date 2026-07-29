@@ -15,11 +15,17 @@ services:
       - key: CLIENT_ID
         value: "1527620499042205757"
       - key: GUILD_ID
-        value: "1527624956882714715"
-      - key: ANNOUNCEMENT_CHANNEL_ID
-        value: "1527624958082158655"
+        value: "1527782633218768956"
+      - key: ANNOUNCEMENT_CHANNEL_IDS
+        value: "1527782639711293553,1527951057538256896"
       - key: MOD_LOG_CHANNEL_ID
-        value: "1527625712985575486"
+        value: "1532081947872858132"
+      - key: ACTIVITY_LOG_CHANNEL_ID
+        value: "1532081947872858132"
+      - key: BIRTHDAY_CHANNEL_ID
+        value: "1527951057538256896"
+      - key: BIRTHDAY_REGISTRATION_CHANNEL_ID
+        value: "1532086608231268604"
       - key: ANTI_RAID_ENABLED
         value: "true"
       - key: RAID_JOIN_LIMIT
