@@ -459,10 +459,20 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const guild = newState.guild;
     if (guild.id !== config.guildId || newState.member?.user.bot)
         return;
-    if (oldState.channelId === newState.channelId)
-        return;
     const member = newState.member ?? oldState.member;
     const identity = member ? `${member} (${member.user.tag} — ${member.id})` : `Membre ${newState.id}`;
+    const serverMuteChanged = oldState.serverMute !== newState.serverMute;
+    const serverDeafChanged = oldState.serverDeaf !== newState.serverDeaf;
+    if (serverMuteChanged || serverDeafChanged) {
+        const moderator = await voiceModerator(guild, AuditLogEvent.MemberUpdate, newState.id);
+        const actions = [
+            serverMuteChanged ? `Microphone serveur : **${newState.serverMute ? "coupé" : "réactivé"}**` : null,
+            serverDeafChanged ? `Son serveur : **${newState.serverDeaf ? "coupé" : "réactivé"}**` : null,
+        ].filter((action) => Boolean(action));
+        await activityLog(guild, "Modération vocale", `${identity}\n${actions.join("\n")}${newState.channelId ? `\nSalon : <#${newState.channelId}>` : ""}${moderator ? `\nModérateur : ${moderator}` : ""}`, newState.serverMute || newState.serverDeaf ? 0xef4444 : 0x22c55e);
+    }
+    if (oldState.channelId === newState.channelId)
+        return;
     if (!oldState.channelId && newState.channelId) {
         await activityLog(guild, "Connexion vocale", `${identity}\nSalon : <#${newState.channelId}>`, 0x22c55e);
         return;
