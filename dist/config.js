@@ -20,9 +20,10 @@ export const config = {
         .split(",")
         .map((id) => id.trim())
         .filter(Boolean),
-    modLogChannelId: process.env.MOD_LOG_CHANNEL_ID?.trim(),
-    birthdayChannelId: process.env.BIRTHDAY_CHANNEL_ID?.trim() || "1289751044301000714",
-    birthdayRegistrationChannelId: process.env.BIRTHDAY_REGISTRATION_CHANNEL_ID?.trim() || "1531342839638786068",
+    modLogChannelId: process.env.MOD_LOG_CHANNEL_ID?.trim() || process.env.ACTIVITY_LOG_CHANNEL_ID?.trim() || "1532081947872858132",
+    activityLogChannelId: process.env.ACTIVITY_LOG_CHANNEL_ID?.trim() || "1532081947872858132",
+    birthdayChannelId: process.env.BIRTHDAY_CHANNEL_ID?.trim() || "1527951057538256896",
+    birthdayRegistrationChannelId: process.env.BIRTHDAY_REGISTRATION_CHANNEL_ID?.trim() || "1532086608231268604",
     antiRaidEnabled: process.env.ANTI_RAID_ENABLED !== "false",
     raidJoinLimit: positiveNumber("RAID_JOIN_LIMIT", 8),
     raidWindowMs: positiveNumber("RAID_WINDOW_SECONDS", 15) * 1000,

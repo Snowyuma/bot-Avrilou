@@ -1,4 +1,5 @@
 import {
+  AuditLogEvent,
   ChannelType,
   ChatInputCommandInteraction,
   Client,
@@ -7,6 +8,7 @@ import {
   GatewayIntentBits,
   Guild,
   GuildMember,
+  Partials,
   PermissionFlagsBits,
 } from "discord.js";
 import { config } from "./config.js";
@@ -15,10 +17,12 @@ import { formatDuration, parseDuration } from "./durations.js";
 import { cancelScheduledBan, loadScheduledBans, scheduleBan, takeExpiredBans } from "./scheduled-bans.js";
 
 const client = new Client({
+  partials: [Partials.Channel, Partials.Message, Partials.User],
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.GuildVoiceStates,
     GatewayIntentBits.MessageContent,
   ],
 });
@@ -121,6 +125,30 @@ async function log(guild: Guild, title: string, description: string, color = 0xf
   const channel = await guild.channels.fetch(config.modLogChannelId).catch(() => null);
   if (!channel?.isTextBased()) return;
   await channel.send({ embeds: [new EmbedBuilder().setTitle(title).setDescription(description).setColor(color).setTimestamp()] }).catch(console.error);
+}
+
+function clipped(value: string | null | undefined, limit = 1500): string {
+  const text = value?.trim() || "(vide ou indisponible)";
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
+
+async function activityLog(guild: Guild, title: string, description: string, color = 0x64748b) {
+  const channel = await guild.channels.fetch(config.activityLogChannelId).catch(() => null);
+  if (!channel?.isTextBased() || !("send" in channel)) return;
+  await channel.send({
+    embeds: [new EmbedBuilder().setTitle(title).setDescription(description.slice(0, 4096)).setColor(color).setTimestamp()],
+    allowedMentions: { parse: [] },
+  }).catch((error) => console.error("Impossible d'envoyer un journal d'activité :", error));
+}
+
+async function voiceModerator(guild: Guild, action: AuditLogEvent, memberId: string): Promise<string | null> {
+  if (!guild.members.me?.permissions.has(PermissionFlagsBits.ViewAuditLog)) return null;
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  const audit = await guild.fetchAuditLogs({ type: action, limit: 5 }).catch(() => null);
+  const entry = audit?.entries.find((item) =>
+    item.targetId === memberId && Date.now() - item.createdTimestamp < 5_000,
+  );
+  return entry?.executor ? `${entry.executor} (${entry.executor.id})` : null;
 }
 
 async function setLockdown(guild: Guild, enabled: boolean): Promise<number> {
@@ -401,6 +429,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
+  if (member.guild.id === config.guildId) {
+    await activityLog(member.guild, "Membre arrivé", `${member} (${member.user.tag} — ${member.id})`, 0x22c55e);
+  }
   if (!config.antiRaidEnabled || member.guild.id !== config.guildId) return;
   const now = Date.now();
   const joins = (recentJoins.get(member.guild.id) ?? []).filter((time) => now - time <= config.raidWindowMs);
@@ -419,14 +450,77 @@ client.on(Events.GuildMemberAdd, async (member) => {
   }
 });
 
+client.on(Events.GuildMemberRemove, async (member) => {
+  if (member.guild.id !== config.guildId) return;
+  await activityLog(member.guild, "Membre parti ou expulsé", `${member.user.tag} (${member.id})`, 0xef4444);
+});
+
+client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
+  if (!newMessage.guild || newMessage.guild.id !== config.guildId || newMessage.author?.bot) return;
+  if (newMessage.channelId === config.activityLogChannelId || oldMessage.content === newMessage.content) return;
+  await activityLog(
+    newMessage.guild,
+    "Message modifié",
+    `Auteur : ${newMessage.author ?? "inconnu"} (${newMessage.author?.id ?? "inconnu"})\nSalon : <#${newMessage.channelId}>\n[Accéder au message](${newMessage.url})\n\n**Avant**\n${clipped(oldMessage.content)}\n\n**Après**\n${clipped(newMessage.content)}`,
+    0xf59e0b,
+  );
+});
+
+client.on(Events.MessageDelete, async (message) => {
+  if (!message.guild || message.guild.id !== config.guildId || message.author?.bot) return;
+  if (message.channelId === config.activityLogChannelId) return;
+  const attachments = [...message.attachments.values()].map((file) => file.url).join("\n");
+  await activityLog(
+    message.guild,
+    "Message supprimé",
+    `Auteur : ${message.author ?? "inconnu"} (${message.author?.id ?? "inconnu"})\nSalon : <#${message.channelId}>\n\n**Contenu**\n${clipped(message.content)}${attachments ? `\n\n**Pièces jointes**\n${clipped(attachments, 1000)}` : ""}`,
+    0xef4444,
+  );
+});
+
+client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
+  const guild = newState.guild;
+  if (guild.id !== config.guildId || newState.member?.user.bot) return;
+  if (oldState.channelId === newState.channelId) return;
+
+  const member = newState.member ?? oldState.member;
+  const identity = member ? `${member} (${member.user.tag} — ${member.id})` : `Membre ${newState.id}`;
+
+  if (!oldState.channelId && newState.channelId) {
+    await activityLog(guild, "Connexion vocale", `${identity}\nSalon : <#${newState.channelId}>`, 0x22c55e);
+    return;
+  }
+
+  if (oldState.channelId && !newState.channelId) {
+    const moderator = await voiceModerator(guild, AuditLogEvent.MemberDisconnect, newState.id);
+    await activityLog(
+      guild,
+      moderator ? "Expulsion d'un salon vocal" : "Déconnexion vocale",
+      `${identity}\nAncien salon : <#${oldState.channelId}>${moderator ? `\nModérateur : ${moderator}` : ""}`,
+      moderator ? 0xef4444 : 0x64748b,
+    );
+    return;
+  }
+
+  if (oldState.channelId && newState.channelId) {
+    const moderator = await voiceModerator(guild, AuditLogEvent.MemberMove, newState.id);
+    await activityLog(
+      guild,
+      moderator ? "Membre déplacé par un modérateur" : "Changement de salon vocal",
+      `${identity}\nDe : <#${oldState.channelId}>\nVers : <#${newState.channelId}>${moderator ? `\nModérateur : ${moderator}` : ""}`,
+      moderator ? 0xf97316 : 0x3b82f6,
+    );
+  }
+});
+
 client.on(Events.MessageCreate, async (message) => {
   if (!message.guild || message.guild.id !== config.guildId || message.author.bot) return;
 
   const normalized = message.content.normalize("NFKC").toLocaleLowerCase("fr");
-  if (normalized.trim() === "coucou") {
+  if (/\bcoucou\b/u.test(normalized)) {
     await message.react("🖕").catch((error) => console.error("Impossible de réagir au message « coucou » :", error));
   }
-  if (normalized.trim() === "pieds") {
+  if (/\bpieds\b/u.test(normalized)) {
     await message.react("👃").catch((error) => console.error("Impossible de réagir au message « pieds » :", error));
   }
   if (normalized.trim() === "micode") {
