@@ -1,8 +1,9 @@
 import { AuditLogEvent, ChannelType, Client, EmbedBuilder, Events, GatewayIntentBits, Partials, PermissionFlagsBits, } from "discord.js";
-import { config } from "./config.js";
+import { config, getGuildConfig } from "./config.js";
 import { getDueBirthdays, loadBirthdays, markBirthdayCelebrated, saveBirthday } from "./birthdays.js";
 import { formatDuration, parseDuration } from "./durations.js";
 import { cancelScheduledBan, loadScheduledBans, scheduleBan, takeExpiredBans } from "./scheduled-bans.js";
+import { addWarning, getWarnings, loadWarnings, removeLatestWarning } from "./warnings.js";
 const client = new Client({
     partials: [Partials.Channel, Partials.Message, Partials.User],
     intents: [
@@ -86,32 +87,35 @@ function currentParisDate() {
     return { day: value("day"), month: value("month"), year: value("year") };
 }
 async function celebrateBirthdays() {
-    const guild = client.guilds.cache.get(config.guildId);
-    if (!guild)
-        return;
-    const channel = await guild.channels.fetch(config.birthdayChannelId).catch(() => null);
-    if (!channel?.isTextBased() || !("send" in channel))
-        return;
     const { day, month, year } = currentParisDate();
-    for (const birthday of getDueBirthdays(guild.id, day, month, year)) {
-        const member = await guild.members.fetch(birthday.userId).catch(() => null);
-        if (!member)
+    for (const guildConfig of config.guilds.values()) {
+        const guild = client.guilds.cache.get(guildConfig.guildId);
+        if (!guild)
             continue;
-        const sent = await channel.send({
-            content: `🎂 Joyeux anniversaire ${member} ! Toute l'équipe te souhaite une excellente journée ! 🎉`,
-            allowedMentions: { users: [member.id] },
-        }).then(() => true).catch((error) => {
-            console.error(`Impossible de souhaiter l'anniversaire de ${member.user.tag} :`, error);
-            return false;
-        });
-        if (sent)
-            await markBirthdayCelebrated(guild.id, member.id, year);
+        const channel = await guild.channels.fetch(guildConfig.birthdayChannelId).catch(() => null);
+        if (!channel?.isTextBased() || !("send" in channel))
+            continue;
+        for (const birthday of getDueBirthdays(guild.id, day, month, year)) {
+            const member = await guild.members.fetch(birthday.userId).catch(() => null);
+            if (!member)
+                continue;
+            const sent = await channel.send({
+                content: `🎂 Joyeux anniversaire ${member} ! Toute l'équipe te souhaite une excellente journée ! 🎉`,
+                allowedMentions: { users: [member.id] },
+            }).then(() => true).catch((error) => {
+                console.error(`Impossible de souhaiter l'anniversaire de ${member.user.tag} :`, error);
+                return false;
+            });
+            if (sent)
+                await markBirthdayCelebrated(guild.id, member.id, year);
+        }
     }
 }
 async function log(guild, title, description, color = 0xf59e0b) {
-    if (!config.modLogChannelId)
+    const guildConfig = getGuildConfig(guild.id);
+    if (!guildConfig)
         return;
-    const channel = await guild.channels.fetch(config.modLogChannelId).catch(() => null);
+    const channel = await guild.channels.fetch(guildConfig.modLogChannelId).catch(() => null);
     if (!channel?.isTextBased())
         return;
     await channel.send({ embeds: [new EmbedBuilder().setTitle(title).setDescription(description).setColor(color).setTimestamp()] }).catch(console.error);
@@ -121,7 +125,10 @@ function clipped(value, limit = 1500) {
     return text.length > limit ? `${text.slice(0, limit)}…` : text;
 }
 async function activityLog(guild, title, description, color = 0x64748b) {
-    const channel = await guild.channels.fetch(config.activityLogChannelId).catch(() => null);
+    const guildConfig = getGuildConfig(guild.id);
+    if (!guildConfig)
+        return;
+    const channel = await guild.channels.fetch(guildConfig.activityLogChannelId).catch(() => null);
     if (!channel?.isTextBased() || !("send" in channel))
         return;
     await channel.send({
@@ -138,12 +145,15 @@ async function voiceModerator(guild, action, memberId) {
     return entry?.executor ? `${entry.executor} (${entry.executor.id})` : null;
 }
 async function setLockdown(guild, enabled) {
+    const guildConfig = getGuildConfig(guild.id);
+    if (!guildConfig)
+        return 0;
     const channels = await guild.channels.fetch();
     let changed = 0;
     for (const channel of channels.values()) {
         if (!channel || (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement))
             continue;
-        if (channel.id === config.modLogChannelId)
+        if (channel.id === guildConfig.modLogChannelId)
             continue;
         await channel.permissionOverwrites.edit(guild.roles.everyone, { SendMessages: enabled ? false : null }, { reason: "Protection anti-raid" }).catch(() => undefined);
         changed++;
@@ -184,7 +194,8 @@ async function notifySanction(member, sanction, reason, duration) {
 async function handleCommand(interaction) {
     if (!interaction.guild)
         return interaction.reply({ content: "Commande utilisable uniquement sur un serveur.", ephemeral: true });
-    if (interaction.guild.id !== config.guildId)
+    const guildConfig = getGuildConfig(interaction.guild.id);
+    if (!guildConfig)
         return interaction.reply({ content: "Ce bot n'est pas configuré pour ce serveur.", ephemeral: true });
     if (interaction.commandName === "ban") {
         const user = interaction.options.getUser("membre", true);
@@ -252,8 +263,37 @@ async function handleCommand(interaction) {
             return interaction.reply({ content: "Ce membre est introuvable sur le serveur.", ephemeral: true });
         await interaction.deferReply({ ephemeral: true });
         const dmResult = await notifySanction(member, "Avertissement", reason);
-        await log(interaction.guild, `Avertissement pour ${user.tag}`, `Membre : ${user} (${user.id})\nModérateur : ${interaction.user} (${interaction.user.id})\nRaison : ${reason}\nMessage privé : ${dmResult.sent ? "envoyé" : "non envoyé"}`, 0xf59e0b);
-        return interaction.editReply(`⚠️ Avertissement enregistré pour **${user.tag}**. Message privé : ${dmResult.sent ? "envoyé" : "non envoyé (MP fermés ou bot bloqué)"}.`);
+        const warningCount = await addWarning({
+            guildId: interaction.guild.id,
+            userId: user.id,
+            moderatorId: interaction.user.id,
+            reason,
+            createdAt: Date.now(),
+        });
+        await log(interaction.guild, `Avertissement pour ${user.tag}`, `Membre : ${user} (${user.id})\nModérateur : ${interaction.user} (${interaction.user.id})\nRaison : ${reason}\nTotal : ${warningCount}\nMessage privé : ${dmResult.sent ? "envoyé" : "non envoyé"}`, 0xf59e0b);
+        return interaction.editReply(`⚠️ Avertissement n°${warningCount} enregistré pour **${user.tag}**. Message privé : ${dmResult.sent ? "envoyé" : "non envoyé (MP fermés ou bot bloqué)"}.`);
+    }
+    if (interaction.commandName === "avertissements") {
+        const user = interaction.options.getUser("membre", true);
+        const warnings = getWarnings(interaction.guild.id, user.id);
+        if (!warnings.length)
+            return interaction.reply({ content: `**${user.tag}** n'a aucun avertissement.`, ephemeral: true });
+        const history = warnings.slice(-10).map((warning, index) => `**${warnings.length - Math.min(10, warnings.length) + index + 1}.** <t:${Math.floor(warning.createdAt / 1000)}:d> — ${clipped(warning.reason, 250)} — <@${warning.moderatorId}>`);
+        return interaction.reply({
+            content: `⚠️ **${warnings.length} avertissement(s) pour ${user.tag}**\n${history.join("\n")}${warnings.length > 10 ? "\n_Les 10 plus récents sont affichés._" : ""}`,
+            ephemeral: true,
+            allowedMentions: { parse: [] },
+        });
+    }
+    if (interaction.commandName === "retireravertissement") {
+        const user = interaction.options.getUser("membre", true);
+        const removalReason = interaction.options.getString("raison")?.trim() || "Aucun motif indiqué";
+        const removed = await removeLatestWarning(interaction.guild.id, user.id);
+        if (!removed)
+            return interaction.reply({ content: `**${user.tag}** n'a aucun avertissement à retirer.`, ephemeral: true });
+        const remaining = getWarnings(interaction.guild.id, user.id).length;
+        await log(interaction.guild, `Avertissement retiré pour ${user.tag}`, `Membre : ${user} (${user.id})\nModérateur : ${interaction.user} (${interaction.user.id})\nAvertissement retiré : ${removed.reason}\nMotif du retrait : ${removalReason}\nTotal restant : ${remaining}`, 0x22c55e);
+        return interaction.reply({ content: `✅ Dernier avertissement de **${user.tag}** retiré. Total restant : **${remaining}**.`, ephemeral: true });
     }
     if (interaction.commandName === "unban") {
         const userId = interaction.options.getString("utilisateur_id", true).trim();
@@ -304,9 +344,9 @@ async function handleCommand(interaction) {
         return log(interaction.guild, "Exclusion retirée", `${member.user.tag} (${member.id})\nMotif : ${reason}`, 0x22c55e);
     }
     if (interaction.commandName === "creationanniv") {
-        if (interaction.channelId !== config.birthdayRegistrationChannelId) {
+        if (interaction.channelId !== guildConfig.birthdayRegistrationChannelId) {
             return interaction.reply({
-                content: `Cette commande est utilisable uniquement dans <#${config.birthdayRegistrationChannelId}>.`,
+                content: `Cette commande est utilisable uniquement dans <#${guildConfig.birthdayRegistrationChannelId}>.`,
                 ephemeral: true,
             });
         }
@@ -334,7 +374,7 @@ async function handleCommand(interaction) {
     if (interaction.commandName === "publier") {
         const selectedChannel = interaction.options.getChannel("salon");
         const targetChannel = await interaction.guild.channels.fetch(selectedChannel?.id ?? interaction.channelId).catch(() => null);
-        const allowedChannelIds = [...new Set([...config.announcementChannelIds, config.modLogChannelId].filter((id) => Boolean(id)))];
+        const allowedChannelIds = [...new Set([...guildConfig.announcementChannelIds, guildConfig.modLogChannelId])];
         if (!targetChannel || !allowedChannelIds.includes(targetChannel.id)) {
             const allowed = allowedChannelIds.map((id) => `<#${id}>`).join(", ");
             return interaction.reply({ content: `Ce salon n'est pas autorisé pour les publications.${allowed ? ` Salons autorisés : ${allowed}.` : ""}`, ephemeral: true });
@@ -377,12 +417,13 @@ async function handleCommand(interaction) {
         return log(interaction.guild, enabled ? "Lockdown activé" : "Lockdown désactivé", `Action manuelle par ${interaction.user.tag}.`, enabled ? 0xef4444 : 0x22c55e);
     }
     if (interaction.commandName === "antiraid") {
-        return interaction.reply({ content: [`Protection : **${config.antiRaidEnabled ? "active" : "inactive"}**`, `Seuil : **${config.raidJoinLimit} arrivées / ${config.raidWindowMs / 1000}s**`, `Âge minimal : **${config.minAccountAgeMs / 3_600_000}h**`, `Lockdown : **${lockedGuilds.has(interaction.guild.id) ? "actif" : "inactif"}**`].join("\n"), ephemeral: true });
+        return interaction.reply({ content: [`Protection : **${guildConfig.antiRaidEnabled ? "active" : "inactive"}**`, `Seuil : **${guildConfig.raidJoinLimit} arrivées / ${guildConfig.raidWindowMs / 1000}s**`, `Âge minimal : **${guildConfig.minAccountAgeMs / 3_600_000}h**`, `Lockdown : **${lockedGuilds.has(interaction.guild.id) ? "actif" : "inactif"}**`].join("\n"), ephemeral: true });
     }
 }
 client.once(Events.ClientReady, async (ready) => {
     await loadScheduledBans();
     await loadBirthdays();
+    await loadWarnings();
     console.log(`Connecté en tant que ${ready.user.tag}.`);
     await celebrateBirthdays();
     setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
@@ -416,48 +457,61 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 });
 client.on(Events.GuildMemberAdd, async (member) => {
-    if (member.guild.id === config.guildId) {
-        await activityLog(member.guild, "Membre arrivé", `${member} (${member.user.tag} — ${member.id})`, 0x22c55e);
-    }
-    if (!config.antiRaidEnabled || member.guild.id !== config.guildId)
+    const guildConfig = getGuildConfig(member.guild.id);
+    if (!guildConfig)
+        return;
+    await activityLog(member.guild, "Membre arrivé", `${member} (${member.user.tag} — ${member.id})`, 0x22c55e);
+    if (!guildConfig.antiRaidEnabled)
         return;
     const now = Date.now();
-    const joins = (recentJoins.get(member.guild.id) ?? []).filter((time) => now - time <= config.raidWindowMs);
+    const joins = (recentJoins.get(member.guild.id) ?? []).filter((time) => now - time <= guildConfig.raidWindowMs);
     joins.push(now);
     recentJoins.set(member.guild.id, joins);
     const accountAge = now - member.user.createdTimestamp;
-    if (config.quarantineRoleId && accountAge < config.minAccountAgeMs) {
-        await member.roles.add(config.quarantineRoleId, "Compte récent : quarantaine anti-raid").catch(() => undefined);
+    if (guildConfig.kickYoungAccounts && accountAge < guildConfig.minAccountAgeMs) {
+        const ageDays = Math.floor(accountAge / 86_400_000);
+        const kicked = await member.kick(`Compte âgé de moins de ${Math.floor(guildConfig.minAccountAgeMs / 86_400_000)} jours`)
+            .then(() => true)
+            .catch((error) => {
+            console.error(`Impossible d'expulser le compte récent ${member.user.tag} :`, error);
+            return false;
+        });
+        await activityLog(member.guild, kicked ? "Compte trop récent expulsé" : "Échec d'expulsion d'un compte récent", `${member.user.tag} (${member.id}) — compte âgé de ${ageDays} jour(s).`, kicked ? 0xef4444 : 0xf59e0b);
+    }
+    else if (guildConfig.quarantineRoleId && accountAge < guildConfig.minAccountAgeMs) {
+        await member.roles.add(guildConfig.quarantineRoleId, "Compte récent : quarantaine anti-raid").catch(() => undefined);
         await log(member.guild, "Compte récent mis en quarantaine", `${member.user.tag} (${member.id}) — compte âgé de ${Math.floor(accountAge / 3_600_000)}h.`, 0xf59e0b);
     }
-    if (joins.length >= config.raidJoinLimit && !lockedGuilds.has(member.guild.id)) {
+    if (joins.length >= guildConfig.raidJoinLimit && !lockedGuilds.has(member.guild.id)) {
         const count = await setLockdown(member.guild, true);
-        await log(member.guild, "🚨 Raid potentiel détecté", `${joins.length} arrivées en ${config.raidWindowMs / 1000}s. Lockdown automatique activé sur ${count} salons.`, 0xdc2626);
+        await log(member.guild, "🚨 Raid potentiel détecté", `${joins.length} arrivées en ${guildConfig.raidWindowMs / 1000}s. Lockdown automatique activé sur ${count} salons.`, 0xdc2626);
     }
 });
 client.on(Events.GuildMemberRemove, async (member) => {
-    if (member.guild.id !== config.guildId)
+    if (!getGuildConfig(member.guild.id))
         return;
     await activityLog(member.guild, "Membre parti ou expulsé", `${member.user.tag} (${member.id})`, 0xef4444);
 });
 client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
-    if (!newMessage.guild || newMessage.guild.id !== config.guildId || newMessage.author?.bot)
+    const guildConfig = newMessage.guild ? getGuildConfig(newMessage.guild.id) : undefined;
+    if (!newMessage.guild || !guildConfig || newMessage.author?.bot)
         return;
-    if (newMessage.channelId === config.activityLogChannelId || oldMessage.content === newMessage.content)
+    if (newMessage.channelId === guildConfig.activityLogChannelId || oldMessage.content === newMessage.content)
         return;
     await activityLog(newMessage.guild, "Message modifié", `Auteur : ${newMessage.author ?? "inconnu"} (${newMessage.author?.id ?? "inconnu"})\nSalon : <#${newMessage.channelId}>\n[Accéder au message](${newMessage.url})\n\n**Avant**\n${clipped(oldMessage.content)}\n\n**Après**\n${clipped(newMessage.content)}`, 0xf59e0b);
 });
 client.on(Events.MessageDelete, async (message) => {
-    if (!message.guild || message.guild.id !== config.guildId || message.author?.bot)
+    const guildConfig = message.guild ? getGuildConfig(message.guild.id) : undefined;
+    if (!message.guild || !guildConfig || message.author?.bot)
         return;
-    if (message.channelId === config.activityLogChannelId)
+    if (message.channelId === guildConfig.activityLogChannelId)
         return;
     const attachments = [...message.attachments.values()].map((file) => file.url).join("\n");
     await activityLog(message.guild, "Message supprimé", `Auteur : ${message.author ?? "inconnu"} (${message.author?.id ?? "inconnu"})\nSalon : <#${message.channelId}>\n\n**Contenu**\n${clipped(message.content)}${attachments ? `\n\n**Pièces jointes**\n${clipped(attachments, 1000)}` : ""}`, 0xef4444);
 });
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const guild = newState.guild;
-    if (guild.id !== config.guildId || newState.member?.user.bot)
+    if (!getGuildConfig(guild.id) || newState.member?.user.bot)
         return;
     const member = newState.member ?? oldState.member;
     const identity = member ? `${member} (${member.user.tag} — ${member.id})` : `Membre ${newState.id}`;
@@ -488,7 +542,8 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     }
 });
 client.on(Events.MessageCreate, async (message) => {
-    if (!message.guild || message.guild.id !== config.guildId || message.author.bot)
+    const guildConfig = message.guild ? getGuildConfig(message.guild.id) : undefined;
+    if (!message.guild || !guildConfig || message.author.bot)
         return;
     const normalized = message.content.normalize("NFKC").toLocaleLowerCase("fr");
     if (/\bcoucou\b/u.test(normalized)) {
@@ -496,6 +551,9 @@ client.on(Events.MessageCreate, async (message) => {
     }
     if (/\bpieds\b/u.test(normalized)) {
         await message.react("👃").catch((error) => console.error("Impossible de réagir au message « pieds » :", error));
+    }
+    if (guildConfig.snowReaction && /\bneiges?\b/u.test(normalized)) {
+        await message.react("❄️").catch((error) => console.error("Impossible de réagir au message parlant de neige :", error));
     }
     if (normalized.trim() === "micode") {
         const hearts = ["❤️", "🧡", "💛", "💚", "💙", "💜", "🤎", "🖤", "🤍", "🩷", "🩵", "🩶"];
@@ -510,9 +568,9 @@ client.on(Events.MessageCreate, async (message) => {
         const reply = getMentionReply(message.content, client.user.id);
         await message.reply(reply).catch((error) => console.error("Impossible de répondre à la mention du bot :", error));
     }
-    if (!config.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages))
+    if (!guildConfig.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages))
         return;
-    const blockedWord = config.blockedWords.find((word) => normalized.includes(word));
+    const blockedWord = guildConfig.blockedWords.find((word) => normalized.includes(word));
     if (!blockedWord)
         return;
     const preview = message.content.length > 300 ? `${message.content.slice(0, 300)}…` : message.content;

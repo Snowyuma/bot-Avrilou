@@ -3,3 +3,4 @@ node_modules/
 *.log
 scheduled-bans.json
 birthdays.json
+warnings.json
