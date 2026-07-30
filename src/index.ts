@@ -65,13 +65,49 @@ const chatReplies = {
     "Quel est le comble pour un électricien ? De ne pas être au courant.",
     "Que dit une imprimante dans l'eau ? J'ai papier.",
   ],
+  farewells: [
+    "À bientôt ! Prends soin de toi.",
+    "Salut, reviens vite !",
+    "À plus tard, humain.",
+    "Bonne continuation et à la prochaine !",
+  ],
+  goodnight: [
+    "Bonne nuit, fais de beaux rêves ! 🌙",
+    "Dors bien, je surveille le serveur pendant ce temps.",
+    "Bonne nuit ! Recharge bien tes batteries.",
+    "À demain, repose-toi bien !",
+  ],
+  affection: [
+    "Bien sûr que je t'aime, à ma façon de petit bot. 💜",
+    "Je t'apprécie énormément, mais garde-moi une place dans ton processeur.",
+    "Oui ! Même quand tu me poses des questions bizarres.",
+    "Tu fais partie de mes humains préférés.",
+  ],
+  compliments: [
+    "Tu es incroyable, ne laisse personne te dire le contraire.",
+    "Aujourd'hui, je te donne officiellement la note de 20/20.",
+    "Tu as beaucoup de style, c'est validé par mes circuits.",
+    "Franchement ? Tu gères.",
+  ],
+  status: [
+    "Oui, je fonctionne ! Tous mes circuits sont réveillés.",
+    "Présente et opérationnelle.",
+    "Je suis bien en ligne et prête à aider.",
+    "Tout va bien de mon côté !",
+  ],
+  bored: [
+    "On peut discuter, faire pile ou face, ou demander une blague.",
+    "Je te propose une activité révolutionnaire : embêter gentiment les modérateurs.",
+    "Demande-moi une blague, ça ne guérira peut-être pas l'ennui mais ça aidera.",
+    "Profites-en pour dire quelque chose de gentil à quelqu'un sur le serveur.",
+  ],
 };
 
 function randomReply(replies: string[]): string {
   return replies[Math.floor(Math.random() * replies.length)]!;
 }
 
-function getMentionReply(content: string, botId: string): string {
+function getMentionReply(content: string, botId: string, randomMember?: string): string {
   const text = content
     .replace(new RegExp(`<@!?${botId}>`, "g"), " ")
     .normalize("NFD")
@@ -82,9 +118,25 @@ function getMentionReply(content: string, botId: string): string {
     .trim();
 
   if (/\b(blague|vanne|rire|rigoler)\b/.test(text)) return randomReply(chatReplies.jokes);
+  if (/\b(qui est|c est qui|parle moi de).*\b(snow|yuma|snowyuma)\b/.test(text)) {
+    return "C'est mon papa, le plus fort et le plus beau de l'univers. 💜";
+  }
+  if (/\b(qui|quelle personne|lequel|laquelle).*\b(plus nul|plus nulle)\b/.test(text) && randomMember) {
+    return `Après une analyse totalement scientifique et absolument pas truquée… je choisis **${randomMember}** ! C'est pour rire, évidemment.`;
+  }
   if (/\b(ca va|comment vas tu|comment tu vas|tu vas bien)\b/.test(text)) return randomReply(chatReplies.wellbeing);
   if (/\b(tu fais quoi|que fais tu|qu est ce que tu fais|quoi de neuf)\b/.test(text)) return randomReply(chatReplies.activity);
   if (/\b(merci|thanks)\b/.test(text)) return randomReply(chatReplies.thanks);
+  if (/\b(au revoir|a plus|a bientot|salut bye|bye)\b/.test(text)) return randomReply(chatReplies.farewells);
+  if (/\b(bonne nuit|je vais dormir|dodo|vais me coucher)\b/.test(text)) return randomReply(chatReplies.goodnight);
+  if (/\b(tu m aime|tu nous aime|je t aime|bisou|calin)\b/.test(text)) return randomReply(chatReplies.affection);
+  if (/\b(dis moi quelque chose de gentil|complimente moi|remonte moi le moral|je suis nul|je suis nulle)\b/.test(text)) return randomReply(chatReplies.compliments);
+  if (/\b(tu fonctionne|tu marches|tu es en ligne|t es en ligne|ping|tu es la)\b/.test(text)) return randomReply(chatReplies.status);
+  if (/\b(je m ennuie|on s ennuie|quoi faire|ennui)\b/.test(text)) return randomReply(chatReplies.bored);
+  if (/\b(pile ou face)\b/.test(text)) return Math.random() < 0.5 ? "🪙 Pile !" : "🪙 Face !";
+  if (/\b(aide|help|que peux tu faire|tes commandes)\b/.test(text)) {
+    return "Je peux discuter, raconter une blague, faire pile ou face, répondre à quelques questions et réagir à certains mots. Pour les outils du serveur, tape `/` pour voir mes commandes.";
+  }
   if (!text || /\b(salut|bonjour|bonsoir|coucou|hello|hey)\b/.test(text)) return randomReply(chatReplies.greetings);
   if (/\b(qui es tu|t es qui|ton nom)\b/.test(text)) return "Je suis Avrilou Bot, gardien du serveur et raconteur officiel de blagues nulles.";
   return "Je n'ai pas encore compris cette question, mais tu peux me demander comment je vais, ce que je fais ou une petite vanne.";
@@ -733,7 +785,11 @@ client.on(Events.MessageCreate, async (message) => {
     await message.reply("Non, adobe est mieux").catch((error) => console.error("Impossible de répondre au message parlant de DaVinci :", error));
   }
   if (client.user && message.mentions.users.has(client.user.id)) {
-    const reply = getMentionReply(message.content, client.user.id);
+    const candidates = message.guild.members.cache
+      .filter((member) => !member.user.bot)
+      .map((member) => member.displayName);
+    const randomMember = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : undefined;
+    const reply = getMentionReply(message.content, client.user.id, randomMember);
     await message.reply(reply).catch((error) => console.error("Impossible de répondre à la mention du bot :", error));
   }
 
