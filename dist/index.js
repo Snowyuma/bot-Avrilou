@@ -49,11 +49,47 @@ const chatReplies = {
         "Quel est le comble pour un électricien ? De ne pas être au courant.",
         "Que dit une imprimante dans l'eau ? J'ai papier.",
     ],
+    farewells: [
+        "À bientôt ! Prends soin de toi.",
+        "Salut, reviens vite !",
+        "À plus tard, humain.",
+        "Bonne continuation et à la prochaine !",
+    ],
+    goodnight: [
+        "Bonne nuit, fais de beaux rêves ! 🌙",
+        "Dors bien, je surveille le serveur pendant ce temps.",
+        "Bonne nuit ! Recharge bien tes batteries.",
+        "À demain, repose-toi bien !",
+    ],
+    affection: [
+        "Bien sûr que je t'aime, à ma façon de petit bot. 💜",
+        "Je t'apprécie énormément, mais garde-moi une place dans ton processeur.",
+        "Oui ! Même quand tu me poses des questions bizarres.",
+        "Tu fais partie de mes humains préférés.",
+    ],
+    compliments: [
+        "Tu es incroyable, ne laisse personne te dire le contraire.",
+        "Aujourd'hui, je te donne officiellement la note de 20/20.",
+        "Tu as beaucoup de style, c'est validé par mes circuits.",
+        "Franchement ? Tu gères.",
+    ],
+    status: [
+        "Oui, je fonctionne ! Tous mes circuits sont réveillés.",
+        "Présente et opérationnelle.",
+        "Je suis bien en ligne et prête à aider.",
+        "Tout va bien de mon côté !",
+    ],
+    bored: [
+        "On peut discuter, faire pile ou face, ou demander une blague.",
+        "Je te propose une activité révolutionnaire : embêter gentiment les modérateurs.",
+        "Demande-moi une blague, ça ne guérira peut-être pas l'ennui mais ça aidera.",
+        "Profites-en pour dire quelque chose de gentil à quelqu'un sur le serveur.",
+    ],
 };
 function randomReply(replies) {
     return replies[Math.floor(Math.random() * replies.length)];
 }
-function getMentionReply(content, botId) {
+function getMentionReply(content, botId, randomMember) {
     const text = content
         .replace(new RegExp(`<@!?${botId}>`, "g"), " ")
         .normalize("NFD")
@@ -64,12 +100,35 @@ function getMentionReply(content, botId) {
         .trim();
     if (/\b(blague|vanne|rire|rigoler)\b/.test(text))
         return randomReply(chatReplies.jokes);
+    if (/\b(qui est|c est qui|parle moi de).*\b(snow|yuma|snowyuma)\b/.test(text)) {
+        return "C'est mon papa, le plus fort et le plus beau de l'univers. 💜";
+    }
+    if (/\b(qui|quelle personne|lequel|laquelle).*\b(plus nul|plus nulle)\b/.test(text) && randomMember) {
+        return `Après une analyse totalement scientifique et absolument pas truquée… je choisis **${randomMember}** ! C'est pour rire, évidemment.`;
+    }
     if (/\b(ca va|comment vas tu|comment tu vas|tu vas bien)\b/.test(text))
         return randomReply(chatReplies.wellbeing);
     if (/\b(tu fais quoi|que fais tu|qu est ce que tu fais|quoi de neuf)\b/.test(text))
         return randomReply(chatReplies.activity);
     if (/\b(merci|thanks)\b/.test(text))
         return randomReply(chatReplies.thanks);
+    if (/\b(au revoir|a plus|a bientot|salut bye|bye)\b/.test(text))
+        return randomReply(chatReplies.farewells);
+    if (/\b(bonne nuit|je vais dormir|dodo|vais me coucher)\b/.test(text))
+        return randomReply(chatReplies.goodnight);
+    if (/\b(tu m aime|tu nous aime|je t aime|bisou|calin)\b/.test(text))
+        return randomReply(chatReplies.affection);
+    if (/\b(dis moi quelque chose de gentil|complimente moi|remonte moi le moral|je suis nul|je suis nulle)\b/.test(text))
+        return randomReply(chatReplies.compliments);
+    if (/\b(tu fonctionne|tu marches|tu es en ligne|t es en ligne|ping|tu es la)\b/.test(text))
+        return randomReply(chatReplies.status);
+    if (/\b(je m ennuie|on s ennuie|quoi faire|ennui)\b/.test(text))
+        return randomReply(chatReplies.bored);
+    if (/\b(pile ou face)\b/.test(text))
+        return Math.random() < 0.5 ? "🪙 Pile !" : "🪙 Face !";
+    if (/\b(aide|help|que peux tu faire|tes commandes)\b/.test(text)) {
+        return "Je peux discuter, raconter une blague, faire pile ou face, répondre à quelques questions et réagir à certains mots. Pour les outils du serveur, tape `/` pour voir mes commandes.";
+    }
     if (!text || /\b(salut|bonjour|bonsoir|coucou|hello|hey)\b/.test(text))
         return randomReply(chatReplies.greetings);
     if (/\b(qui es tu|t es qui|ton nom)\b/.test(text))
@@ -136,13 +195,62 @@ async function activityLog(guild, title, description, color = 0x64748b) {
         allowedMentions: { parse: [] },
     }).catch((error) => console.error("Impossible d'envoyer un journal d'activité :", error));
 }
-async function voiceModerator(guild, action, memberId) {
+async function auditExecutor(guild, action, targetId) {
     if (!guild.members.me?.permissions.has(PermissionFlagsBits.ViewAuditLog))
         return null;
     await new Promise((resolve) => setTimeout(resolve, 750));
     const audit = await guild.fetchAuditLogs({ type: action, limit: 5 }).catch(() => null);
-    const entry = audit?.entries.find((item) => item.targetId === memberId && Date.now() - item.createdTimestamp < 5_000);
+    const entry = audit?.entries.find((item) => item.targetId === targetId && Date.now() - item.createdTimestamp < 5_000);
     return entry?.executor ? `${entry.executor} (${entry.executor.id})` : null;
+}
+function permissionSnapshot(channel) {
+    return [...channel.permissionOverwrites.cache.values()]
+        .map((overwrite) => `${overwrite.id}:${overwrite.type}:${overwrite.allow.bitfield}:${overwrite.deny.bitfield}`)
+        .sort()
+        .join("|");
+}
+function channelChanges(oldChannel, newChannel) {
+    const changes = [];
+    if (oldChannel.name !== newChannel.name)
+        changes.push(`Nom : **${oldChannel.name}** → **${newChannel.name}**`);
+    if (oldChannel.parentId !== newChannel.parentId) {
+        changes.push(`Catégorie : ${oldChannel.parentId ? `<#${oldChannel.parentId}>` : "aucune"} → ${newChannel.parentId ? `<#${newChannel.parentId}>` : "aucune"}`);
+    }
+    if (oldChannel.rawPosition !== newChannel.rawPosition)
+        changes.push(`Position : **${oldChannel.rawPosition}** → **${newChannel.rawPosition}**`);
+    if ("topic" in oldChannel && "topic" in newChannel && oldChannel.topic !== newChannel.topic) {
+        changes.push(`Sujet : ${clipped(String(oldChannel.topic ?? "(aucun)"), 300)} → ${clipped(String(newChannel.topic ?? "(aucun)"), 300)}`);
+    }
+    if ("nsfw" in oldChannel && "nsfw" in newChannel && oldChannel.nsfw !== newChannel.nsfw) {
+        changes.push(`NSFW : **${oldChannel.nsfw ? "oui" : "non"}** → **${newChannel.nsfw ? "oui" : "non"}**`);
+    }
+    if ("rateLimitPerUser" in oldChannel && "rateLimitPerUser" in newChannel && oldChannel.rateLimitPerUser !== newChannel.rateLimitPerUser) {
+        changes.push(`Mode lent : **${oldChannel.rateLimitPerUser}s** → **${newChannel.rateLimitPerUser}s**`);
+    }
+    if ("bitrate" in oldChannel && "bitrate" in newChannel && oldChannel.bitrate !== newChannel.bitrate) {
+        changes.push(`Débit vocal : **${oldChannel.bitrate}** → **${newChannel.bitrate}**`);
+    }
+    if ("userLimit" in oldChannel && "userLimit" in newChannel && oldChannel.userLimit !== newChannel.userLimit) {
+        changes.push(`Limite d'utilisateurs : **${oldChannel.userLimit || "aucune"}** → **${newChannel.userLimit || "aucune"}**`);
+    }
+    if (permissionSnapshot(oldChannel) !== permissionSnapshot(newChannel))
+        changes.push("Permissions du salon modifiées.");
+    return changes;
+}
+function commandOptions(interaction) {
+    if (!interaction.options.data.length)
+        return "(aucune)";
+    return interaction.options.data.map((option) => {
+        if (option.name === "message")
+            return `**${option.name}** : (contenu masqué)`;
+        if (option.user)
+            return `**${option.name}** : ${option.user.tag} (${option.user.id})`;
+        if (option.channel)
+            return `**${option.name}** : <#${option.channel.id}> (${option.channel.id})`;
+        if (option.attachment)
+            return `**${option.name}** : ${option.attachment.name}`;
+        return `**${option.name}** : ${clipped(option.value === undefined ? "(non renseigné)" : String(option.value), 500)}`;
+    }).join("\n");
 }
 async function setLockdown(guild, enabled) {
     const guildConfig = getGuildConfig(guild.id);
@@ -442,9 +550,16 @@ client.once(Events.ClientReady, async (ready) => {
 });
 client.on(Events.InteractionCreate, async (interaction) => {
     try {
-        if (interaction.isChatInputCommand())
+        if (interaction.isChatInputCommand()) {
+            if (interaction.guild && getGuildConfig(interaction.guild.id)) {
+                await activityLog(interaction.guild, `Commande /${interaction.commandName}`, `Utilisateur : ${interaction.user} (${interaction.user.tag} — ${interaction.user.id})\nSalon : <#${interaction.channelId}>\nOptions :\n${commandOptions(interaction)}`, 0x8b5cf6);
+            }
             await handleCommand(interaction);
+        }
         else if (interaction.isUserContextMenuCommand() && interaction.commandName === "Informations du compte") {
+            if (interaction.guild && getGuildConfig(interaction.guild.id)) {
+                await activityLog(interaction.guild, `Commande ${interaction.commandName}`, `Utilisateur : ${interaction.user} (${interaction.user.tag} — ${interaction.user.id})\nCible : ${interaction.targetUser} (${interaction.targetUser.tag} — ${interaction.targetId})\nSalon : <#${interaction.channelId}>`, 0x8b5cf6);
+            }
             const ageDays = Math.floor((Date.now() - interaction.targetUser.createdTimestamp) / 86_400_000);
             await interaction.reply({ content: `Compte : **${interaction.targetUser.tag}**\nIdentifiant : \`${interaction.targetId}\`\nÂge : **${ageDays} jours**\nCréé : <t:${Math.floor(interaction.targetUser.createdTimestamp / 1000)}:F>`, ephemeral: true });
         }
@@ -455,6 +570,28 @@ client.on(Events.InteractionCreate, async (interaction) => {
         if (interaction.isRepliable())
             interaction.replied || interaction.deferred ? await interaction.followUp(payload).catch(() => undefined) : await interaction.reply(payload).catch(() => undefined);
     }
+});
+client.on(Events.ChannelCreate, async (channel) => {
+    const guildConfig = getGuildConfig(channel.guild.id);
+    if (!guildConfig)
+        return;
+    const executor = await auditExecutor(channel.guild, AuditLogEvent.ChannelCreate, channel.id);
+    await activityLog(channel.guild, "Salon créé", `Salon : ${channel} (**${channel.name}** — ${channel.id})\nType : **${ChannelType[channel.type] ?? channel.type}**${channel.parentId ? `\nCatégorie : <#${channel.parentId}>` : ""}${executor ? `\nCréé par : ${executor}` : ""}`, 0x22c55e);
+});
+client.on(Events.ChannelDelete, async (channel) => {
+    if (!getGuildConfig(channel.guild.id))
+        return;
+    const executor = await auditExecutor(channel.guild, AuditLogEvent.ChannelDelete, channel.id);
+    await activityLog(channel.guild, "Salon supprimé", `Salon : **${channel.name}** (${channel.id})\nType : **${ChannelType[channel.type] ?? channel.type}**${channel.parentId ? `\nAncienne catégorie : <#${channel.parentId}>` : ""}${executor ? `\nSupprimé par : ${executor}` : ""}`, 0xef4444);
+});
+client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
+    if (!getGuildConfig(newChannel.guild.id))
+        return;
+    const changes = channelChanges(oldChannel, newChannel);
+    if (!changes.length)
+        return;
+    const executor = await auditExecutor(newChannel.guild, AuditLogEvent.ChannelUpdate, newChannel.id);
+    await activityLog(newChannel.guild, "Salon modifié", `Salon : ${newChannel} (**${newChannel.name}** — ${newChannel.id})\n${changes.join("\n")}${executor ? `\nModifié par : ${executor}` : ""}`, 0xf59e0b);
 });
 client.on(Events.GuildMemberAdd, async (member) => {
     const guildConfig = getGuildConfig(member.guild.id);
@@ -517,13 +654,26 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const identity = member ? `${member} (${member.user.tag} — ${member.id})` : `Membre ${newState.id}`;
     const serverMuteChanged = oldState.serverMute !== newState.serverMute;
     const serverDeafChanged = oldState.serverDeaf !== newState.serverDeaf;
+    const selfMuteChanged = oldState.selfMute !== newState.selfMute;
+    const selfDeafChanged = oldState.selfDeaf !== newState.selfDeaf;
+    const cameraChanged = oldState.selfVideo !== newState.selfVideo;
+    const streamChanged = oldState.streaming !== newState.streaming;
     if (serverMuteChanged || serverDeafChanged) {
-        const moderator = await voiceModerator(guild, AuditLogEvent.MemberUpdate, newState.id);
+        const moderator = await auditExecutor(guild, AuditLogEvent.MemberUpdate, newState.id);
         const actions = [
             serverMuteChanged ? `Microphone serveur : **${newState.serverMute ? "coupé" : "réactivé"}**` : null,
             serverDeafChanged ? `Son serveur : **${newState.serverDeaf ? "coupé" : "réactivé"}**` : null,
         ].filter((action) => Boolean(action));
         await activityLog(guild, "Modération vocale", `${identity}\n${actions.join("\n")}${newState.channelId ? `\nSalon : <#${newState.channelId}>` : ""}${moderator ? `\nModérateur : ${moderator}` : ""}`, newState.serverMute || newState.serverDeaf ? 0xef4444 : 0x22c55e);
+    }
+    if (selfMuteChanged || selfDeafChanged || cameraChanged || streamChanged) {
+        const actions = [
+            selfMuteChanged ? `Microphone personnel : **${newState.selfMute ? "coupé" : "réactivé"}**` : null,
+            selfDeafChanged ? `Casque personnel : **${newState.selfDeaf ? "coupé" : "réactivé"}**` : null,
+            cameraChanged ? `Caméra : **${newState.selfVideo ? "activée" : "désactivée"}**` : null,
+            streamChanged ? `Partage d'écran : **${newState.streaming ? "démarré" : "arrêté"}**` : null,
+        ].filter((action) => Boolean(action));
+        await activityLog(guild, "Activité vocale personnelle", `${identity}\n${actions.join("\n")}${newState.channelId ? `\nSalon : <#${newState.channelId}>` : ""}`, newState.selfVideo || newState.streaming ? 0x3b82f6 : 0x64748b);
     }
     if (oldState.channelId === newState.channelId)
         return;
@@ -532,12 +682,12 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         return;
     }
     if (oldState.channelId && !newState.channelId) {
-        const moderator = await voiceModerator(guild, AuditLogEvent.MemberDisconnect, newState.id);
+        const moderator = await auditExecutor(guild, AuditLogEvent.MemberDisconnect, newState.id);
         await activityLog(guild, moderator ? "Expulsion d'un salon vocal" : "Déconnexion vocale", `${identity}\nAncien salon : <#${oldState.channelId}>${moderator ? `\nModérateur : ${moderator}` : ""}`, moderator ? 0xef4444 : 0x64748b);
         return;
     }
     if (oldState.channelId && newState.channelId) {
-        const moderator = await voiceModerator(guild, AuditLogEvent.MemberMove, newState.id);
+        const moderator = await auditExecutor(guild, AuditLogEvent.MemberMove, newState.id);
         await activityLog(guild, moderator ? "Membre déplacé par un modérateur" : "Changement de salon vocal", `${identity}\nDe : <#${oldState.channelId}>\nVers : <#${newState.channelId}>${moderator ? `\nModérateur : ${moderator}` : ""}`, moderator ? 0xf97316 : 0x3b82f6);
     }
 });
@@ -565,7 +715,11 @@ client.on(Events.MessageCreate, async (message) => {
         await message.reply("Non, adobe est mieux").catch((error) => console.error("Impossible de répondre au message parlant de DaVinci :", error));
     }
     if (client.user && message.mentions.users.has(client.user.id)) {
-        const reply = getMentionReply(message.content, client.user.id);
+        const candidates = message.guild.members.cache
+            .filter((member) => !member.user.bot)
+            .map((member) => member.displayName);
+        const randomMember = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : undefined;
+        const reply = getMentionReply(message.content, client.user.id, randomMember);
         await message.reply(reply).catch((error) => console.error("Impossible de répondre à la mention du bot :", error));
     }
     if (!guildConfig.blockedWords.length || message.member?.permissions.has(PermissionFlagsBits.ManageMessages))
