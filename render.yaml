@@ -35,7 +35,7 @@ services:
       - key: MIN_ACCOUNT_AGE_HOURS
         value: "24"
       - key: BLOCKED_WORDS
-        value: "hitler,antoine daniel,sardoche,discord.gg,yumyum"
+        value: "yumyum,avril_fantome,avril_fantôme,avril fantome,avril fantôme,avril-fantome,avril-fantôme,avrilfantome,avrilfantôme"
     disk:
       name: avrilou-data
       mountPath: /var/data

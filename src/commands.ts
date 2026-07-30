@@ -37,6 +37,17 @@ export const commands = [
     .addStringOption((o) => o.setName("raison").setDescription("Raison de l'avertissement").setRequired(true).setMaxLength(512))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
   new SlashCommandBuilder()
+    .setName("avertissements")
+    .setDescription("Affiche l'historique des avertissements d'un membre")
+    .addUserOption((o) => o.setName("membre").setDescription("Membre à vérifier").setRequired(true))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  new SlashCommandBuilder()
+    .setName("retireravertissement")
+    .setDescription("Retire le dernier avertissement d'un membre")
+    .addUserOption((o) => o.setName("membre").setDescription("Membre concerné").setRequired(true))
+    .addStringOption((o) => o.setName("raison").setDescription("Motif du retrait").setMaxLength(512))
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
+  new SlashCommandBuilder()
     .setName("creationanniv")
     .setDescription("Enregistre la date d'anniversaire d'un membre")
     .addUserOption((o) => o.setName("membre").setDescription("Membre à qui souhaiter son anniversaire").setRequired(true))

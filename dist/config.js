@@ -12,9 +12,7 @@ function positiveNumber(name, fallback) {
         throw new Error(`${name} doit être un nombre positif.`);
     return value;
 }
-export const config = {
-    token: required("DISCORD_TOKEN"),
-    clientId: required("CLIENT_ID"),
+const primaryGuild = {
     guildId: required("GUILD_ID"),
     announcementChannelIds: (process.env.ANNOUNCEMENT_CHANNEL_IDS ?? process.env.ANNOUNCEMENT_CHANNEL_ID ?? "")
         .split(",")
@@ -29,8 +27,38 @@ export const config = {
     raidWindowMs: positiveNumber("RAID_WINDOW_SECONDS", 15) * 1000,
     minAccountAgeMs: positiveNumber("MIN_ACCOUNT_AGE_HOURS", 24) * 3_600_000,
     quarantineRoleId: process.env.QUARANTINE_ROLE_ID?.trim(),
+    kickYoungAccounts: false,
     blockedWords: (process.env.BLOCKED_WORDS ?? "")
         .split(",")
         .map((word) => word.trim().toLocaleLowerCase("fr"))
         .filter(Boolean),
+    snowReaction: false,
 };
+const friendGuild = {
+    guildId: "1465840945001140247",
+    announcementChannelIds: [
+        "1465840946192318660",
+        "1465840946192318662",
+        "1465840946192318663",
+        "1465856560805711872",
+    ],
+    modLogChannelId: "1532174715920318674",
+    activityLogChannelId: "1532174715920318674",
+    birthdayChannelId: "1465840946192318662",
+    birthdayRegistrationChannelId: "1465856560805711872",
+    antiRaidEnabled: true,
+    raidJoinLimit: 4,
+    raidWindowMs: 10_000,
+    minAccountAgeMs: 14 * 86_400_000,
+    kickYoungAccounts: true,
+    blockedWords: ["yumyum", "mon cerf"],
+    snowReaction: true,
+};
+export const config = {
+    token: required("DISCORD_TOKEN"),
+    clientId: required("CLIENT_ID"),
+    guilds: new Map([primaryGuild, friendGuild].map((guild) => [guild.guildId, guild])),
+};
+export function getGuildConfig(guildId) {
+    return config.guilds.get(guildId);
+}
