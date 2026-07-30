@@ -11,6 +11,7 @@ import {
   Partials,
   PermissionFlagsBits,
 } from "discord.js";
+import type { GuildChannel } from "discord.js";
 import { config, getGuildConfig } from "./config.js";
 import { getDueBirthdays, loadBirthdays, markBirthdayCelebrated, saveBirthday } from "./birthdays.js";
 import { formatDuration, parseDuration } from "./durations.js";
@@ -146,14 +147,58 @@ async function activityLog(guild: Guild, title: string, description: string, col
   }).catch((error) => console.error("Impossible d'envoyer un journal d'activité :", error));
 }
 
-async function voiceModerator(guild: Guild, action: AuditLogEvent, memberId: string): Promise<string | null> {
+async function auditExecutor(guild: Guild, action: AuditLogEvent, targetId: string): Promise<string | null> {
   if (!guild.members.me?.permissions.has(PermissionFlagsBits.ViewAuditLog)) return null;
   await new Promise((resolve) => setTimeout(resolve, 750));
   const audit = await guild.fetchAuditLogs({ type: action, limit: 5 }).catch(() => null);
   const entry = audit?.entries.find((item) =>
-    item.targetId === memberId && Date.now() - item.createdTimestamp < 5_000,
+    item.targetId === targetId && Date.now() - item.createdTimestamp < 5_000,
   );
   return entry?.executor ? `${entry.executor} (${entry.executor.id})` : null;
+}
+
+function permissionSnapshot(channel: GuildChannel): string {
+  return [...channel.permissionOverwrites.cache.values()]
+    .map((overwrite) => `${overwrite.id}:${overwrite.type}:${overwrite.allow.bitfield}:${overwrite.deny.bitfield}`)
+    .sort()
+    .join("|");
+}
+
+function channelChanges(oldChannel: GuildChannel, newChannel: GuildChannel): string[] {
+  const changes: string[] = [];
+  if (oldChannel.name !== newChannel.name) changes.push(`Nom : **${oldChannel.name}** → **${newChannel.name}**`);
+  if (oldChannel.parentId !== newChannel.parentId) {
+    changes.push(`Catégorie : ${oldChannel.parentId ? `<#${oldChannel.parentId}>` : "aucune"} → ${newChannel.parentId ? `<#${newChannel.parentId}>` : "aucune"}`);
+  }
+  if (oldChannel.rawPosition !== newChannel.rawPosition) changes.push(`Position : **${oldChannel.rawPosition}** → **${newChannel.rawPosition}**`);
+  if ("topic" in oldChannel && "topic" in newChannel && oldChannel.topic !== newChannel.topic) {
+    changes.push(`Sujet : ${clipped(String(oldChannel.topic ?? "(aucun)"), 300)} → ${clipped(String(newChannel.topic ?? "(aucun)"), 300)}`);
+  }
+  if ("nsfw" in oldChannel && "nsfw" in newChannel && oldChannel.nsfw !== newChannel.nsfw) {
+    changes.push(`NSFW : **${oldChannel.nsfw ? "oui" : "non"}** → **${newChannel.nsfw ? "oui" : "non"}**`);
+  }
+  if ("rateLimitPerUser" in oldChannel && "rateLimitPerUser" in newChannel && oldChannel.rateLimitPerUser !== newChannel.rateLimitPerUser) {
+    changes.push(`Mode lent : **${oldChannel.rateLimitPerUser}s** → **${newChannel.rateLimitPerUser}s**`);
+  }
+  if ("bitrate" in oldChannel && "bitrate" in newChannel && oldChannel.bitrate !== newChannel.bitrate) {
+    changes.push(`Débit vocal : **${oldChannel.bitrate}** → **${newChannel.bitrate}**`);
+  }
+  if ("userLimit" in oldChannel && "userLimit" in newChannel && oldChannel.userLimit !== newChannel.userLimit) {
+    changes.push(`Limite d'utilisateurs : **${oldChannel.userLimit || "aucune"}** → **${newChannel.userLimit || "aucune"}**`);
+  }
+  if (permissionSnapshot(oldChannel) !== permissionSnapshot(newChannel)) changes.push("Permissions du salon modifiées.");
+  return changes;
+}
+
+function commandOptions(interaction: ChatInputCommandInteraction): string {
+  if (!interaction.options.data.length) return "(aucune)";
+  return interaction.options.data.map((option) => {
+    if (option.name === "message") return `**${option.name}** : (contenu masqué)`;
+    if (option.user) return `**${option.name}** : ${option.user.tag} (${option.user.id})`;
+    if (option.channel) return `**${option.name}** : <#${option.channel.id}> (${option.channel.id})`;
+    if (option.attachment) return `**${option.name}** : ${option.attachment.name}`;
+    return `**${option.name}** : ${clipped(option.value === undefined ? "(non renseigné)" : String(option.value), 500)}`;
+  }).join("\n");
 }
 
 async function setLockdown(guild: Guild, enabled: boolean): Promise<number> {
@@ -461,8 +506,26 @@ client.once(Events.ClientReady, async (ready) => {
 
 client.on(Events.InteractionCreate, async (interaction) => {
   try {
-    if (interaction.isChatInputCommand()) await handleCommand(interaction);
+    if (interaction.isChatInputCommand()) {
+      if (interaction.guild && getGuildConfig(interaction.guild.id)) {
+        await activityLog(
+          interaction.guild,
+          `Commande /${interaction.commandName}`,
+          `Utilisateur : ${interaction.user} (${interaction.user.tag} — ${interaction.user.id})\nSalon : <#${interaction.channelId}>\nOptions :\n${commandOptions(interaction)}`,
+          0x8b5cf6,
+        );
+      }
+      await handleCommand(interaction);
+    }
     else if (interaction.isUserContextMenuCommand() && interaction.commandName === "Informations du compte") {
+      if (interaction.guild && getGuildConfig(interaction.guild.id)) {
+        await activityLog(
+          interaction.guild,
+          `Commande ${interaction.commandName}`,
+          `Utilisateur : ${interaction.user} (${interaction.user.tag} — ${interaction.user.id})\nCible : ${interaction.targetUser} (${interaction.targetUser.tag} — ${interaction.targetId})\nSalon : <#${interaction.channelId}>`,
+          0x8b5cf6,
+        );
+      }
       const ageDays = Math.floor((Date.now() - interaction.targetUser.createdTimestamp) / 86_400_000);
       await interaction.reply({ content: `Compte : **${interaction.targetUser.tag}**\nIdentifiant : \`${interaction.targetId}\`\nÂge : **${ageDays} jours**\nCréé : <t:${Math.floor(interaction.targetUser.createdTimestamp / 1000)}:F>`, ephemeral: true });
     }
@@ -471,6 +534,42 @@ client.on(Events.InteractionCreate, async (interaction) => {
     const payload = { content: "Une erreur est survenue. Vérifie mes permissions et les logs.", ephemeral: true };
     if (interaction.isRepliable()) interaction.replied || interaction.deferred ? await interaction.followUp(payload).catch(() => undefined) : await interaction.reply(payload).catch(() => undefined);
   }
+});
+
+client.on(Events.ChannelCreate, async (channel) => {
+  const guildConfig = getGuildConfig(channel.guild.id);
+  if (!guildConfig) return;
+  const executor = await auditExecutor(channel.guild, AuditLogEvent.ChannelCreate, channel.id);
+  await activityLog(
+    channel.guild,
+    "Salon créé",
+    `Salon : ${channel} (**${channel.name}** — ${channel.id})\nType : **${ChannelType[channel.type] ?? channel.type}**${channel.parentId ? `\nCatégorie : <#${channel.parentId}>` : ""}${executor ? `\nCréé par : ${executor}` : ""}`,
+    0x22c55e,
+  );
+});
+
+client.on(Events.ChannelDelete, async (channel) => {
+  if (!getGuildConfig(channel.guild.id)) return;
+  const executor = await auditExecutor(channel.guild, AuditLogEvent.ChannelDelete, channel.id);
+  await activityLog(
+    channel.guild,
+    "Salon supprimé",
+    `Salon : **${channel.name}** (${channel.id})\nType : **${ChannelType[channel.type] ?? channel.type}**${channel.parentId ? `\nAncienne catégorie : <#${channel.parentId}>` : ""}${executor ? `\nSupprimé par : ${executor}` : ""}`,
+    0xef4444,
+  );
+});
+
+client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
+  if (!getGuildConfig(newChannel.guild.id)) return;
+  const changes = channelChanges(oldChannel, newChannel);
+  if (!changes.length) return;
+  const executor = await auditExecutor(newChannel.guild, AuditLogEvent.ChannelUpdate, newChannel.id);
+  await activityLog(
+    newChannel.guild,
+    "Salon modifié",
+    `Salon : ${newChannel} (**${newChannel.name}** — ${newChannel.id})\n${changes.join("\n")}${executor ? `\nModifié par : ${executor}` : ""}`,
+    0xf59e0b,
+  );
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
@@ -547,9 +646,13 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   const identity = member ? `${member} (${member.user.tag} — ${member.id})` : `Membre ${newState.id}`;
   const serverMuteChanged = oldState.serverMute !== newState.serverMute;
   const serverDeafChanged = oldState.serverDeaf !== newState.serverDeaf;
+  const selfMuteChanged = oldState.selfMute !== newState.selfMute;
+  const selfDeafChanged = oldState.selfDeaf !== newState.selfDeaf;
+  const cameraChanged = oldState.selfVideo !== newState.selfVideo;
+  const streamChanged = oldState.streaming !== newState.streaming;
 
   if (serverMuteChanged || serverDeafChanged) {
-    const moderator = await voiceModerator(guild, AuditLogEvent.MemberUpdate, newState.id);
+    const moderator = await auditExecutor(guild, AuditLogEvent.MemberUpdate, newState.id);
     const actions = [
       serverMuteChanged ? `Microphone serveur : **${newState.serverMute ? "coupé" : "réactivé"}**` : null,
       serverDeafChanged ? `Son serveur : **${newState.serverDeaf ? "coupé" : "réactivé"}**` : null,
@@ -562,6 +665,21 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     );
   }
 
+  if (selfMuteChanged || selfDeafChanged || cameraChanged || streamChanged) {
+    const actions = [
+      selfMuteChanged ? `Microphone personnel : **${newState.selfMute ? "coupé" : "réactivé"}**` : null,
+      selfDeafChanged ? `Casque personnel : **${newState.selfDeaf ? "coupé" : "réactivé"}**` : null,
+      cameraChanged ? `Caméra : **${newState.selfVideo ? "activée" : "désactivée"}**` : null,
+      streamChanged ? `Partage d'écran : **${newState.streaming ? "démarré" : "arrêté"}**` : null,
+    ].filter((action): action is string => Boolean(action));
+    await activityLog(
+      guild,
+      "Activité vocale personnelle",
+      `${identity}\n${actions.join("\n")}${newState.channelId ? `\nSalon : <#${newState.channelId}>` : ""}`,
+      newState.selfVideo || newState.streaming ? 0x3b82f6 : 0x64748b,
+    );
+  }
+
   if (oldState.channelId === newState.channelId) return;
 
   if (!oldState.channelId && newState.channelId) {
@@ -570,7 +688,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 
   if (oldState.channelId && !newState.channelId) {
-    const moderator = await voiceModerator(guild, AuditLogEvent.MemberDisconnect, newState.id);
+    const moderator = await auditExecutor(guild, AuditLogEvent.MemberDisconnect, newState.id);
     await activityLog(
       guild,
       moderator ? "Expulsion d'un salon vocal" : "Déconnexion vocale",
@@ -581,7 +699,7 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
   }
 
   if (oldState.channelId && newState.channelId) {
-    const moderator = await voiceModerator(guild, AuditLogEvent.MemberMove, newState.id);
+    const moderator = await auditExecutor(guild, AuditLogEvent.MemberMove, newState.id);
     await activityLog(
       guild,
       moderator ? "Membre déplacé par un modérateur" : "Changement de salon vocal",
