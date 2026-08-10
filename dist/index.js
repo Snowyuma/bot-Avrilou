@@ -22,7 +22,7 @@ const recentMessages = new Map();
 const emergencyGuildId = "1280818990226346070";
 const emergencyBotId = "1534270658211483729";
 let lastEmergencyBanAttempt = 0;
-const emergencyCleanupMarker = resolve(process.env.DATA_DIR?.trim() || ".", `emergency-cleanup-${emergencyGuildId}-${emergencyBotId}.done`);
+const emergencyCleanupMarker = resolve(process.env.DATA_DIR?.trim() || ".", `emergency-cleanup-v2-${emergencyGuildId}-${emergencyBotId}.done`);
 async function banEmergencyBot(guild) {
     if (guild.id !== emergencyGuildId)
         return false;
@@ -44,17 +44,38 @@ async function banEmergencyBot(guild) {
     });
 }
 async function cleanupEmergencyMessages(guild) {
-    const channels = await guild.channels.fetch().catch(() => null);
+    console.log(`Début du parcours de l'historique sur le serveur ${guild.id}...`);
+    const channels = await guild.channels.fetch().catch((error) => {
+        console.error(`Impossible de récupérer les salons du serveur ${guild.id} :`, error);
+        return null;
+    });
     if (!channels)
         return { deleted: 0, complete: false };
     let deleted = 0;
     let complete = true;
-    for (const channel of channels.values()) {
+    const activeThreads = await guild.channels.fetchActiveThreads().catch((error) => {
+        console.error(`Impossible de récupérer les fils actifs du serveur ${guild.id} :`, error);
+        complete = false;
+        return null;
+    });
+    const scannableChannels = [
+        ...channels.values(),
+        ...(activeThreads ? [...activeThreads.threads.values()] : []),
+    ];
+    const seenChannels = new Set();
+    for (const channel of scannableChannels) {
+        if (!channel || seenChannels.has(channel.id))
+            continue;
+        seenChannels.add(channel.id);
         if (!channel?.isTextBased() || !("messages" in channel))
             continue;
+        console.log(`Parcours de #${channel.name} (${channel.id})...`);
         let before;
         while (true) {
-            const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+            const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch((error) => {
+                console.error(`Impossible de lire l'historique de #${channel.name} (${channel.id}) :`, error);
+                return null;
+            });
             if (!messages) {
                 complete = false;
                 break;
@@ -64,7 +85,10 @@ async function cleanupEmergencyMessages(guild) {
             for (const message of messages.values()) {
                 if (message.author.id !== emergencyBotId)
                     continue;
-                const removed = await message.delete().then(() => true).catch(() => false);
+                const removed = await message.delete().then(() => true).catch((error) => {
+                    console.error(`Impossible de supprimer le message ${message.id} dans #${channel.name} (${channel.id}) :`, error);
+                    return false;
+                });
                 if (removed)
                     deleted++;
                 else
@@ -781,7 +805,10 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 client.on(Events.MessageCreate, async (message) => {
     if (message.guild?.id !== emergencyGuildId || message.author.id !== emergencyBotId)
         return;
-    await message.delete().catch((error) => console.error("Impossible de supprimer un message du bot attaquant :", error));
+    console.log(`Message futur du bot attaquant détecté : ${message.id} dans le salon ${message.channel.id}.`);
+    await message.delete()
+        .then(() => console.log(`Message ${message.id} du bot attaquant supprimé.`))
+        .catch((error) => console.error(`Impossible de supprimer le message ${message.id} du bot attaquant :`, error));
     await banEmergencyBot(message.guild);
 });
 client.on(Events.MessageCreate, async (message) => {
