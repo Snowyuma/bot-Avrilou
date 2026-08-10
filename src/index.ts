@@ -79,10 +79,22 @@ async function cleanupEmergencyMessages(guild: Guild): Promise<{ deleted: number
     ...(activeThreads ? [...activeThreads.threads.values()] : []),
   ];
   const seenChannels = new Set<string>();
+  const botMember = guild.members.me ?? await guild.members.fetchMe().catch(() => null);
   for (const channel of scannableChannels) {
     if (!channel || seenChannels.has(channel.id)) continue;
     seenChannels.add(channel.id);
     if (!channel?.isTextBased() || !("messages" in channel)) continue;
+    const permissions = botMember ? channel.permissionsFor(botMember) : null;
+    const missingPermissions = [
+      [PermissionFlagsBits.ViewChannel, "Voir le salon"],
+      [PermissionFlagsBits.ReadMessageHistory, "Voir les anciens messages"],
+      [PermissionFlagsBits.ManageMessages, "Gérer les messages"],
+    ].filter(([permission]) => !permissions?.has(permission as bigint)).map(([, label]) => label);
+    if (missingPermissions.length) {
+      console.error(`Salon inaccessible au nettoyage : #${channel.name} (${channel.id}). Permissions manquantes : ${missingPermissions.join(", ")}.`);
+      complete = false;
+      continue;
+    }
     console.log(`Parcours de #${channel.name} (${channel.id})...`);
     let before: string | undefined;
     while (true) {
@@ -627,6 +639,21 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
 
   if (interaction.commandName === "antiraid") {
     return interaction.reply({ content: [`Protection : **${guildConfig.antiRaidEnabled ? "active" : "inactive"}**`, `Seuil : **${guildConfig.raidJoinLimit} arrivées / ${guildConfig.raidWindowMs / 1000}s**`, `Âge minimal : **${guildConfig.minAccountAgeMs / 3_600_000}h**`, `Lockdown : **${lockedGuilds.has(interaction.guild.id) ? "actif" : "inactif"}**`].join("\n"), ephemeral: true });
+  }
+
+  if (interaction.commandName === "nettoyerbot") {
+    if (interaction.guild.id !== emergencyGuildId) {
+      return interaction.reply({ content: "Cette commande n'est activée que sur le serveur protégé.", ephemeral: true });
+    }
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
+    }
+    await interaction.deferReply({ ephemeral: true });
+    const cleanup = await cleanupEmergencyMessages(interaction.guild);
+    await banEmergencyBot(interaction.guild);
+    return interaction.editReply(
+      `Nettoyage terminé : **${cleanup.deleted} message(s) supprimé(s)**.${cleanup.complete ? " Tous les salons accessibles ont été parcourus." : " Certains salons n'ont pas pu être parcourus : consulte la console pour connaître les permissions manquantes."}`,
+    );
   }
 }
 
