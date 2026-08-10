@@ -16,6 +16,54 @@ const client = new Client({
 });
 const recentJoins = new Map();
 const lockedGuilds = new Set();
+const emergencyGuildId = "1280818990226346070";
+const emergencyBotId = "1534270658211483729";
+const emergencyCleanupChannelId = "1289751044301000714";
+let lastEmergencyBanAttempt = 0;
+async function banEmergencyBot(guild) {
+    if (guild.id !== emergencyGuildId)
+        return false;
+    const existingBan = await guild.bans.fetch(emergencyBotId).catch(() => null);
+    if (existingBan)
+        return true;
+    if (Date.now() - lastEmergencyBanAttempt < 15_000)
+        return false;
+    lastEmergencyBanAttempt = Date.now();
+    return guild.members.ban(emergencyBotId, {
+        reason: "Protection d'urgence contre le bot attaquant",
+        deleteMessageSeconds: 7 * 24 * 60 * 60,
+    }).then(() => {
+        console.log(`Bot attaquant ${emergencyBotId} banni du serveur ${guild.id}.`);
+        return true;
+    }).catch((error) => {
+        console.error(`Impossible de bannir le bot attaquant ${emergencyBotId} :`, error);
+        return false;
+    });
+}
+async function cleanupEmergencyMessages(guild) {
+    const channel = await guild.channels.fetch(emergencyCleanupChannelId).catch(() => null);
+    if (!channel?.isTextBased() || !("messages" in channel))
+        return 0;
+    let before;
+    let deleted = 0;
+    while (true) {
+        const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+        if (!messages?.size)
+            break;
+        for (const message of messages.values()) {
+            if (message.author.id !== emergencyBotId)
+                continue;
+            const removed = await message.delete().then(() => true).catch(() => false);
+            if (removed)
+                deleted++;
+        }
+        before = messages.last()?.id;
+        if (messages.size < 100 || !before)
+            break;
+    }
+    console.log(`${deleted} message(s) du bot attaquant supprimé(s) dans le salon ${emergencyCleanupChannelId}.`);
+    return deleted;
+}
 const chatReplies = {
     greetings: [
         "Salut ! Comment ça va ?",
@@ -533,6 +581,11 @@ client.once(Events.ClientReady, async (ready) => {
     await loadBirthdays();
     await loadWarnings();
     console.log(`Connecté en tant que ${ready.user.tag}.`);
+    const emergencyGuild = ready.guilds.cache.get(emergencyGuildId);
+    if (emergencyGuild) {
+        await banEmergencyBot(emergencyGuild);
+        await cleanupEmergencyMessages(emergencyGuild);
+    }
     await celebrateBirthdays();
     setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
     setInterval(async () => {
@@ -594,6 +647,10 @@ client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
     await activityLog(newChannel.guild, "Salon modifié", `Salon : ${newChannel} (**${newChannel.name}** — ${newChannel.id})\n${changes.join("\n")}${executor ? `\nModifié par : ${executor}` : ""}`, 0xf59e0b);
 });
 client.on(Events.GuildMemberAdd, async (member) => {
+    if (member.guild.id === emergencyGuildId && member.id === emergencyBotId) {
+        await banEmergencyBot(member.guild);
+        return;
+    }
     const guildConfig = getGuildConfig(member.guild.id);
     if (!guildConfig)
         return;
@@ -690,6 +747,12 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         const moderator = await auditExecutor(guild, AuditLogEvent.MemberMove, newState.id);
         await activityLog(guild, moderator ? "Membre déplacé par un modérateur" : "Changement de salon vocal", `${identity}\nDe : <#${oldState.channelId}>\nVers : <#${newState.channelId}>${moderator ? `\nModérateur : ${moderator}` : ""}`, moderator ? 0xf97316 : 0x3b82f6);
     }
+});
+client.on(Events.MessageCreate, async (message) => {
+    if (message.guild?.id !== emergencyGuildId || message.author.id !== emergencyBotId)
+        return;
+    await message.delete().catch((error) => console.error("Impossible de supprimer un message du bot attaquant :", error));
+    await banEmergencyBot(message.guild);
 });
 client.on(Events.MessageCreate, async (message) => {
     const guildConfig = message.guild ? getGuildConfig(message.guild.id) : undefined;
