@@ -4,3 +4,4 @@ node_modules/
 scheduled-bans.json
 birthdays.json
 warnings.json
+emergency-cleanup-*.done

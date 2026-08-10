@@ -4,6 +4,8 @@ import { getDueBirthdays, loadBirthdays, markBirthdayCelebrated, saveBirthday } 
 import { formatDuration, parseDuration } from "./durations.js";
 import { cancelScheduledBan, loadScheduledBans, scheduleBan, takeExpiredBans } from "./scheduled-bans.js";
 import { addWarning, getWarnings, loadWarnings, removeLatestWarning } from "./warnings.js";
+import { access, mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 const client = new Client({
     partials: [Partials.Channel, Partials.Message, Partials.User],
     intents: [
@@ -16,10 +18,11 @@ const client = new Client({
 });
 const recentJoins = new Map();
 const lockedGuilds = new Set();
+const recentMessages = new Map();
 const emergencyGuildId = "1280818990226346070";
 const emergencyBotId = "1534270658211483729";
-const emergencyCleanupChannelId = "1289751044301000714";
 let lastEmergencyBanAttempt = 0;
+const emergencyCleanupMarker = resolve(process.env.DATA_DIR?.trim() || ".", `emergency-cleanup-${emergencyGuildId}-${emergencyBotId}.done`);
 async function banEmergencyBot(guild) {
     if (guild.id !== emergencyGuildId)
         return false;
@@ -41,28 +44,46 @@ async function banEmergencyBot(guild) {
     });
 }
 async function cleanupEmergencyMessages(guild) {
-    const channel = await guild.channels.fetch(emergencyCleanupChannelId).catch(() => null);
-    if (!channel?.isTextBased() || !("messages" in channel))
-        return 0;
-    let before;
+    const channels = await guild.channels.fetch().catch(() => null);
+    if (!channels)
+        return { deleted: 0, complete: false };
     let deleted = 0;
-    while (true) {
-        const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
-        if (!messages?.size)
-            break;
-        for (const message of messages.values()) {
-            if (message.author.id !== emergencyBotId)
-                continue;
-            const removed = await message.delete().then(() => true).catch(() => false);
-            if (removed)
-                deleted++;
+    let complete = true;
+    for (const channel of channels.values()) {
+        if (!channel?.isTextBased() || !("messages" in channel))
+            continue;
+        let before;
+        while (true) {
+            const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+            if (!messages) {
+                complete = false;
+                break;
+            }
+            if (!messages.size)
+                break;
+            for (const message of messages.values()) {
+                if (message.author.id !== emergencyBotId)
+                    continue;
+                const removed = await message.delete().then(() => true).catch(() => false);
+                if (removed)
+                    deleted++;
+                else
+                    complete = false;
+            }
+            before = messages.last()?.id;
+            if (messages.size < 100 || !before)
+                break;
         }
-        before = messages.last()?.id;
-        if (messages.size < 100 || !before)
-            break;
     }
-    console.log(`${deleted} message(s) du bot attaquant supprimé(s) dans le salon ${emergencyCleanupChannelId}.`);
-    return deleted;
+    console.log(`${deleted} message(s) du bot attaquant supprimé(s) sur le serveur ${guild.id}.`);
+    return { deleted, complete };
+}
+async function emergencyCleanupAlreadyDone() {
+    return access(emergencyCleanupMarker).then(() => true).catch(() => false);
+}
+async function markEmergencyCleanupDone() {
+    await mkdir(dirname(emergencyCleanupMarker), { recursive: true });
+    await writeFile(emergencyCleanupMarker, new Date().toISOString(), "utf8");
 }
 const chatReplies = {
     greetings: [
@@ -196,6 +217,8 @@ function currentParisDate() {
 async function celebrateBirthdays() {
     const { day, month, year } = currentParisDate();
     for (const guildConfig of config.guilds.values()) {
+        if (!guildConfig.birthdayChannelId)
+            continue;
         const guild = client.guilds.cache.get(guildConfig.guildId);
         if (!guild)
             continue;
@@ -500,6 +523,9 @@ async function handleCommand(interaction) {
         return log(interaction.guild, "Exclusion retirée", `${member.user.tag} (${member.id})\nMotif : ${reason}`, 0x22c55e);
     }
     if (interaction.commandName === "creationanniv") {
+        if (!guildConfig.birthdayChannelId || !guildConfig.birthdayRegistrationChannelId) {
+            return interaction.reply({ content: "Les anniversaires ne sont pas activés sur ce serveur.", ephemeral: true });
+        }
         if (interaction.channelId !== guildConfig.birthdayRegistrationChannelId) {
             return interaction.reply({
                 content: `Cette commande est utilisable uniquement dans <#${guildConfig.birthdayRegistrationChannelId}>.`,
@@ -584,7 +610,11 @@ client.once(Events.ClientReady, async (ready) => {
     const emergencyGuild = ready.guilds.cache.get(emergencyGuildId);
     if (emergencyGuild) {
         await banEmergencyBot(emergencyGuild);
-        await cleanupEmergencyMessages(emergencyGuild);
+        if (!await emergencyCleanupAlreadyDone()) {
+            const cleanup = await cleanupEmergencyMessages(emergencyGuild);
+            if (cleanup.complete)
+                await markEmergencyCleanupDone();
+        }
     }
     await celebrateBirthdays();
     setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
@@ -758,6 +788,31 @@ client.on(Events.MessageCreate, async (message) => {
     const guildConfig = message.guild ? getGuildConfig(message.guild.id) : undefined;
     if (!message.guild || !guildConfig || message.author.bot)
         return;
+    if (guildConfig.spamMessageLimit &&
+        guildConfig.spamWindowMs &&
+        guildConfig.spamTimeoutMs &&
+        message.member &&
+        !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+        const key = `${message.guild.id}:${message.author.id}`;
+        const now = Date.now();
+        const timestamps = (recentMessages.get(key) ?? []).filter((time) => now - time <= guildConfig.spamWindowMs);
+        timestamps.push(now);
+        recentMessages.set(key, timestamps);
+        if (timestamps.length >= guildConfig.spamMessageLimit) {
+            recentMessages.delete(key);
+            const timedOut = message.member.moderatable
+                ? await message.member.timeout(guildConfig.spamTimeoutMs, `${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde(s)`)
+                    .then(() => true)
+                    .catch((error) => {
+                    console.error(`Impossible d'exclure temporairement ${message.author.tag} pour spam :`, error);
+                    return false;
+                })
+                : false;
+            await message.delete().catch(() => undefined);
+            await activityLog(message.guild, timedOut ? "Anti-spam : membre exclu temporairement" : "Anti-spam : exclusion impossible", `Membre : ${message.author} (${message.author.tag} — ${message.author.id})\nDétection : **${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde(s)**\nDurée prévue : **${guildConfig.spamTimeoutMs / 60_000} minutes**\nSalon : <#${message.channelId}>`, timedOut ? 0xef4444 : 0xf59e0b);
+            return;
+        }
+    }
     const normalized = message.content.normalize("NFKC").toLocaleLowerCase("fr");
     if (/\bcoucou\b/u.test(normalized)) {
         await message.react("🖕").catch((error) => console.error("Impossible de réagir au message « coucou » :", error));
