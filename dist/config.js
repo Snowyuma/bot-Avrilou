@@ -100,7 +100,7 @@ const protectedGuild = {
     snowReaction: false,
     spamMessageLimit: 10,
     spamWindowMs: 1_000,
-    spamTimeoutMs: 10 * 60_000,
+    spamTimeoutMs: 24 * 60 * 60_000,
 };
 export const config = {
     token: required("DISCORD_TOKEN"),
