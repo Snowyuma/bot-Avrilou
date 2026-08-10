@@ -12,8 +12,6 @@ import {
   PermissionFlagsBits,
 } from "discord.js";
 import type { GuildChannel, Message } from "discord.js";
-import { access, mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 import { config, getGuildConfig } from "./config.js";
 import { getDueBirthdays, loadBirthdays, markBirthdayCelebrated, saveBirthday } from "./birthdays.js";
 import { formatDuration, parseDuration } from "./durations.js";
@@ -34,34 +32,23 @@ const client = new Client({
 const recentJoins = new Map<string, number[]>();
 const lockedGuilds = new Set<string>();
 const recentMessages = new Map<string, Array<{ timestamp: number; message: Message }>>();
-const emergencyGuildId = "1280818990226346070";
-const emergencyBotId = "1534270658211483729";
-let lastEmergencyBanAttempt = 0;
-const emergencyCleanupMarker = resolve(
-  process.env.DATA_DIR?.trim() || ".",
-  `emergency-cleanup-v2-${emergencyGuildId}-${emergencyBotId}.done`,
-);
-
-async function banEmergencyBot(guild: Guild): Promise<boolean> {
-  if (guild.id !== emergencyGuildId) return false;
-  const existingBan = await guild.bans.fetch(emergencyBotId).catch(() => null);
+async function banCleanupTarget(guild: Guild, targetId: string): Promise<boolean> {
+  const existingBan = await guild.bans.fetch(targetId).catch(() => null);
   if (existingBan) return true;
-  if (Date.now() - lastEmergencyBanAttempt < 15_000) return false;
-  lastEmergencyBanAttempt = Date.now();
-  return guild.members.ban(emergencyBotId, {
-    reason: "Protection d'urgence contre le bot attaquant",
+  return guild.members.ban(targetId, {
+    reason: "Bannissement demandé avec /nettoyer",
     deleteMessageSeconds: 7 * 24 * 60 * 60,
   }).then(() => {
-    console.log(`Bot attaquant ${emergencyBotId} banni du serveur ${guild.id}.`);
+    console.log(`Identifiant ${targetId} banni du serveur ${guild.id}.`);
     return true;
   }).catch((error) => {
-    console.error(`Impossible de bannir le bot attaquant ${emergencyBotId} :`, error);
+    console.error(`Impossible de bannir l'identifiant ${targetId} :`, error);
     return false;
   });
 }
 
-async function cleanupEmergencyMessages(guild: Guild): Promise<{ deleted: number; complete: boolean }> {
-  console.log(`Début du parcours de l'historique sur le serveur ${guild.id}...`);
+async function cleanupMessagesByAuthor(guild: Guild, targetId: string): Promise<{ deleted: number; complete: boolean }> {
+  console.log(`Début du parcours de l'historique pour l'identifiant ${targetId} sur le serveur ${guild.id}...`);
   const channels = await guild.channels.fetch().catch((error) => {
     console.error(`Impossible de récupérer les salons du serveur ${guild.id} :`, error);
     return null;
@@ -108,7 +95,7 @@ async function cleanupEmergencyMessages(guild: Guild): Promise<{ deleted: number
       }
       if (!messages.size) break;
       for (const message of messages.values()) {
-        if (message.author.id !== emergencyBotId) continue;
+        if (message.author.id !== targetId && message.applicationId !== targetId) continue;
         const removed = await message.delete().then(() => true).catch((error) => {
           console.error(`Impossible de supprimer le message ${message.id} dans #${channel.name} (${channel.id}) :`, error);
           return false;
@@ -120,17 +107,8 @@ async function cleanupEmergencyMessages(guild: Guild): Promise<{ deleted: number
       if (messages.size < 100 || !before) break;
     }
   }
-  console.log(`${deleted} message(s) du bot attaquant supprimé(s) sur le serveur ${guild.id}.`);
+  console.log(`${deleted} message(s) de l'identifiant ${targetId} supprimé(s) sur le serveur ${guild.id}.`);
   return { deleted, complete };
-}
-
-async function emergencyCleanupAlreadyDone(): Promise<boolean> {
-  return access(emergencyCleanupMarker).then(() => true).catch(() => false);
-}
-
-async function markEmergencyCleanupDone() {
-  await mkdir(dirname(emergencyCleanupMarker), { recursive: true });
-  await writeFile(emergencyCleanupMarker, new Date().toISOString(), "utf8");
 }
 
 const chatReplies = {
@@ -641,18 +619,22 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
     return interaction.reply({ content: [`Protection : **${guildConfig.antiRaidEnabled ? "active" : "inactive"}**`, `Seuil : **${guildConfig.raidJoinLimit} arrivées / ${guildConfig.raidWindowMs / 1000}s**`, `Âge minimal : **${guildConfig.minAccountAgeMs / 3_600_000}h**`, `Lockdown : **${lockedGuilds.has(interaction.guild.id) ? "actif" : "inactif"}**`].join("\n"), ephemeral: true });
   }
 
-  if (interaction.commandName === "nettoyerbot") {
-    if (interaction.guild.id !== emergencyGuildId) {
-      return interaction.reply({ content: "Cette commande n'est activée que sur le serveur protégé.", ephemeral: true });
-    }
+  if (interaction.commandName === "nettoyer") {
     if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
       return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
     }
+    const targetId = interaction.options.getString("utilisateur_id", true).trim();
+    if (!/^\d{17,20}$/.test(targetId)) {
+      return interaction.reply({ content: "L'identifiant Discord est invalide.", ephemeral: true });
+    }
+    if (targetId === interaction.client.user.id) {
+      return interaction.reply({ content: "Je refuse de me bannir moi-même.", ephemeral: true });
+    }
     await interaction.deferReply({ ephemeral: true });
-    const cleanup = await cleanupEmergencyMessages(interaction.guild);
-    await banEmergencyBot(interaction.guild);
+    const banned = await banCleanupTarget(interaction.guild, targetId);
+    const cleanup = await cleanupMessagesByAuthor(interaction.guild, targetId);
     return interaction.editReply(
-      `Nettoyage terminé : **${cleanup.deleted} message(s) supprimé(s)**.${cleanup.complete ? " Tous les salons accessibles ont été parcourus." : " Certains salons n'ont pas pu être parcourus : consulte la console pour connaître les permissions manquantes."}`,
+      `Nettoyage de **${targetId}** terminé. Bannissement : **${banned ? "réussi ou déjà actif" : "impossible"}**. Messages supprimés : **${cleanup.deleted}**.${cleanup.complete ? " Tous les salons accessibles ont été parcourus." : " Certains salons n'ont pas pu être parcourus : consulte la console."}`,
     );
   }
 }
@@ -662,14 +644,6 @@ client.once(Events.ClientReady, async (ready) => {
   await loadBirthdays();
   await loadWarnings();
   console.log(`Connecté en tant que ${ready.user.tag}.`);
-  const emergencyGuild = ready.guilds.cache.get(emergencyGuildId);
-  if (emergencyGuild) {
-    await banEmergencyBot(emergencyGuild);
-    if (!await emergencyCleanupAlreadyDone()) {
-      const cleanup = await cleanupEmergencyMessages(emergencyGuild);
-      if (cleanup.complete) await markEmergencyCleanupDone();
-    }
-  }
   await celebrateBirthdays();
   setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
   setInterval(async () => {
@@ -753,10 +727,6 @@ client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
-  if (member.guild.id === emergencyGuildId && member.id === emergencyBotId) {
-    await banEmergencyBot(member.guild);
-    return;
-  }
   const guildConfig = getGuildConfig(member.guild.id);
   if (!guildConfig) return;
   await activityLog(member.guild, "Membre arrivé", `${member} (${member.user.tag} — ${member.id})`, 0x22c55e);
@@ -891,15 +861,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
       moderator ? 0xf97316 : 0x3b82f6,
     );
   }
-});
-
-client.on(Events.MessageCreate, async (message) => {
-  if (message.guild?.id !== emergencyGuildId || message.author.id !== emergencyBotId) return;
-  console.log(`Message futur du bot attaquant détecté : ${message.id} dans le salon ${message.channel.id}.`);
-  await message.delete()
-    .then(() => console.log(`Message ${message.id} du bot attaquant supprimé.`))
-    .catch((error) => console.error(`Impossible de supprimer le message ${message.id} du bot attaquant :`, error));
-  await banEmergencyBot(message.guild);
 });
 
 client.on(Events.MessageCreate, async (message) => {
