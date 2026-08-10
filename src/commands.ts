@@ -92,8 +92,9 @@ export const commands = [
     .setDescription("Affiche l'état de la protection anti-raid")
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder()
-    .setName("nettoyerbot")
-    .setDescription("Parcourt les salons et supprime les messages du bot attaquant")
+    .setName("nettoyer")
+    .setDescription("Bannit un identifiant puis supprime ses messages dans les salons")
+    .addStringOption((o) => o.setName("utilisateur_id").setDescription("ID de l'utilisateur, du bot ou de l'application").setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
   {
     name: "Informations du compte",

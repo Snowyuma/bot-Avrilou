@@ -4,8 +4,6 @@ import { getDueBirthdays, loadBirthdays, markBirthdayCelebrated, saveBirthday } 
 import { formatDuration, parseDuration } from "./durations.js";
 import { cancelScheduledBan, loadScheduledBans, scheduleBan, takeExpiredBans } from "./scheduled-bans.js";
 import { addWarning, getWarnings, loadWarnings, removeLatestWarning } from "./warnings.js";
-import { access, mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
 const client = new Client({
     partials: [Partials.Channel, Partials.Message, Partials.User],
     intents: [
@@ -19,32 +17,23 @@ const client = new Client({
 const recentJoins = new Map();
 const lockedGuilds = new Set();
 const recentMessages = new Map();
-const emergencyGuildId = "1280818990226346070";
-const emergencyBotId = "1534270658211483729";
-let lastEmergencyBanAttempt = 0;
-const emergencyCleanupMarker = resolve(process.env.DATA_DIR?.trim() || ".", `emergency-cleanup-v2-${emergencyGuildId}-${emergencyBotId}.done`);
-async function banEmergencyBot(guild) {
-    if (guild.id !== emergencyGuildId)
-        return false;
-    const existingBan = await guild.bans.fetch(emergencyBotId).catch(() => null);
+async function banCleanupTarget(guild, targetId) {
+    const existingBan = await guild.bans.fetch(targetId).catch(() => null);
     if (existingBan)
         return true;
-    if (Date.now() - lastEmergencyBanAttempt < 15_000)
-        return false;
-    lastEmergencyBanAttempt = Date.now();
-    return guild.members.ban(emergencyBotId, {
-        reason: "Protection d'urgence contre le bot attaquant",
+    return guild.members.ban(targetId, {
+        reason: "Bannissement demandé avec /nettoyer",
         deleteMessageSeconds: 7 * 24 * 60 * 60,
     }).then(() => {
-        console.log(`Bot attaquant ${emergencyBotId} banni du serveur ${guild.id}.`);
+        console.log(`Identifiant ${targetId} banni du serveur ${guild.id}.`);
         return true;
     }).catch((error) => {
-        console.error(`Impossible de bannir le bot attaquant ${emergencyBotId} :`, error);
+        console.error(`Impossible de bannir l'identifiant ${targetId} :`, error);
         return false;
     });
 }
-async function cleanupEmergencyMessages(guild) {
-    console.log(`Début du parcours de l'historique sur le serveur ${guild.id}...`);
+async function cleanupMessagesByAuthor(guild, targetId) {
+    console.log(`Début du parcours de l'historique pour l'identifiant ${targetId} sur le serveur ${guild.id}...`);
     const channels = await guild.channels.fetch().catch((error) => {
         console.error(`Impossible de récupérer les salons du serveur ${guild.id} :`, error);
         return null;
@@ -95,7 +84,7 @@ async function cleanupEmergencyMessages(guild) {
             if (!messages.size)
                 break;
             for (const message of messages.values()) {
-                if (message.author.id !== emergencyBotId)
+                if (message.author.id !== targetId && message.applicationId !== targetId)
                     continue;
                 const removed = await message.delete().then(() => true).catch((error) => {
                     console.error(`Impossible de supprimer le message ${message.id} dans #${channel.name} (${channel.id}) :`, error);
@@ -111,15 +100,8 @@ async function cleanupEmergencyMessages(guild) {
                 break;
         }
     }
-    console.log(`${deleted} message(s) du bot attaquant supprimé(s) sur le serveur ${guild.id}.`);
+    console.log(`${deleted} message(s) de l'identifiant ${targetId} supprimé(s) sur le serveur ${guild.id}.`);
     return { deleted, complete };
-}
-async function emergencyCleanupAlreadyDone() {
-    return access(emergencyCleanupMarker).then(() => true).catch(() => false);
-}
-async function markEmergencyCleanupDone() {
-    await mkdir(dirname(emergencyCleanupMarker), { recursive: true });
-    await writeFile(emergencyCleanupMarker, new Date().toISOString(), "utf8");
 }
 const chatReplies = {
     greetings: [
@@ -637,17 +619,21 @@ async function handleCommand(interaction) {
     if (interaction.commandName === "antiraid") {
         return interaction.reply({ content: [`Protection : **${guildConfig.antiRaidEnabled ? "active" : "inactive"}**`, `Seuil : **${guildConfig.raidJoinLimit} arrivées / ${guildConfig.raidWindowMs / 1000}s**`, `Âge minimal : **${guildConfig.minAccountAgeMs / 3_600_000}h**`, `Lockdown : **${lockedGuilds.has(interaction.guild.id) ? "actif" : "inactif"}**`].join("\n"), ephemeral: true });
     }
-    if (interaction.commandName === "nettoyerbot") {
-        if (interaction.guild.id !== emergencyGuildId) {
-            return interaction.reply({ content: "Cette commande n'est activée que sur le serveur protégé.", ephemeral: true });
-        }
+    if (interaction.commandName === "nettoyer") {
         if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
             return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
         }
+        const targetId = interaction.options.getString("utilisateur_id", true).trim();
+        if (!/^\d{17,20}$/.test(targetId)) {
+            return interaction.reply({ content: "L'identifiant Discord est invalide.", ephemeral: true });
+        }
+        if (targetId === interaction.client.user.id) {
+            return interaction.reply({ content: "Je refuse de me bannir moi-même.", ephemeral: true });
+        }
         await interaction.deferReply({ ephemeral: true });
-        const cleanup = await cleanupEmergencyMessages(interaction.guild);
-        await banEmergencyBot(interaction.guild);
-        return interaction.editReply(`Nettoyage terminé : **${cleanup.deleted} message(s) supprimé(s)**.${cleanup.complete ? " Tous les salons accessibles ont été parcourus." : " Certains salons n'ont pas pu être parcourus : consulte la console pour connaître les permissions manquantes."}`);
+        const banned = await banCleanupTarget(interaction.guild, targetId);
+        const cleanup = await cleanupMessagesByAuthor(interaction.guild, targetId);
+        return interaction.editReply(`Nettoyage de **${targetId}** terminé. Bannissement : **${banned ? "réussi ou déjà actif" : "impossible"}**. Messages supprimés : **${cleanup.deleted}**.${cleanup.complete ? " Tous les salons accessibles ont été parcourus." : " Certains salons n'ont pas pu être parcourus : consulte la console."}`);
     }
 }
 client.once(Events.ClientReady, async (ready) => {
@@ -655,15 +641,6 @@ client.once(Events.ClientReady, async (ready) => {
     await loadBirthdays();
     await loadWarnings();
     console.log(`Connecté en tant que ${ready.user.tag}.`);
-    const emergencyGuild = ready.guilds.cache.get(emergencyGuildId);
-    if (emergencyGuild) {
-        await banEmergencyBot(emergencyGuild);
-        if (!await emergencyCleanupAlreadyDone()) {
-            const cleanup = await cleanupEmergencyMessages(emergencyGuild);
-            if (cleanup.complete)
-                await markEmergencyCleanupDone();
-        }
-    }
     await celebrateBirthdays();
     setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
     setInterval(async () => {
@@ -725,10 +702,6 @@ client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
     await activityLog(newChannel.guild, "Salon modifié", `Salon : ${newChannel} (**${newChannel.name}** — ${newChannel.id})\n${changes.join("\n")}${executor ? `\nModifié par : ${executor}` : ""}`, 0xf59e0b);
 });
 client.on(Events.GuildMemberAdd, async (member) => {
-    if (member.guild.id === emergencyGuildId && member.id === emergencyBotId) {
-        await banEmergencyBot(member.guild);
-        return;
-    }
     const guildConfig = getGuildConfig(member.guild.id);
     if (!guildConfig)
         return;
@@ -825,15 +798,6 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
         const moderator = await auditExecutor(guild, AuditLogEvent.MemberMove, newState.id);
         await activityLog(guild, moderator ? "Membre déplacé par un modérateur" : "Changement de salon vocal", `${identity}\nDe : <#${oldState.channelId}>\nVers : <#${newState.channelId}>${moderator ? `\nModérateur : ${moderator}` : ""}`, moderator ? 0xf97316 : 0x3b82f6);
     }
-});
-client.on(Events.MessageCreate, async (message) => {
-    if (message.guild?.id !== emergencyGuildId || message.author.id !== emergencyBotId)
-        return;
-    console.log(`Message futur du bot attaquant détecté : ${message.id} dans le salon ${message.channel.id}.`);
-    await message.delete()
-        .then(() => console.log(`Message ${message.id} du bot attaquant supprimé.`))
-        .catch((error) => console.error(`Impossible de supprimer le message ${message.id} du bot attaquant :`, error));
-    await banEmergencyBot(message.guild);
 });
 client.on(Events.MessageCreate, async (message) => {
     const guildConfig = message.guild ? getGuildConfig(message.guild.id) : undefined;
