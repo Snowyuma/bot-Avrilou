@@ -846,10 +846,10 @@ client.on(Events.MessageCreate, async (message) => {
         !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
         const key = `${message.guild.id}:${message.author.id}`;
         const now = Date.now();
-        const timestamps = (recentMessages.get(key) ?? []).filter((time) => now - time <= guildConfig.spamWindowMs);
-        timestamps.push(now);
-        recentMessages.set(key, timestamps);
-        if (timestamps.length >= guildConfig.spamMessageLimit) {
+        const recent = (recentMessages.get(key) ?? []).filter((entry) => now - entry.timestamp <= guildConfig.spamWindowMs);
+        recent.push({ timestamp: now, message });
+        recentMessages.set(key, recent);
+        if (recent.length >= guildConfig.spamMessageLimit) {
             recentMessages.delete(key);
             const timedOut = message.member.moderatable
                 ? await message.member.timeout(guildConfig.spamTimeoutMs, `${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde(s)`)
@@ -859,8 +859,8 @@ client.on(Events.MessageCreate, async (message) => {
                     return false;
                 })
                 : false;
-            await message.delete().catch(() => undefined);
-            await activityLog(message.guild, timedOut ? "Anti-spam : membre exclu temporairement" : "Anti-spam : exclusion impossible", `Membre : ${message.author} (${message.author.tag} — ${message.author.id})\nDétection : **${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde(s)**\nDurée prévue : **${guildConfig.spamTimeoutMs / 60_000} minutes**\nSalon : <#${message.channelId}>`, timedOut ? 0xef4444 : 0xf59e0b);
+            const deletedMessages = (await Promise.all(recent.map((entry) => entry.message.delete().then(() => true).catch(() => false)))).filter(Boolean).length;
+            await activityLog(message.guild, timedOut ? "Anti-spam : membre exclu temporairement" : "Anti-spam : exclusion impossible", `Membre : ${message.author} (${message.author.tag} — ${message.author.id})\nDétection : **${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde(s)**\nMessages supprimés : **${deletedMessages}/${recent.length}**\nDurée prévue : **${formatDuration(guildConfig.spamTimeoutMs)}**\nSalon : <#${message.channelId}>`, timedOut ? 0xef4444 : 0xf59e0b);
             return;
         }
     }
