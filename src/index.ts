@@ -174,9 +174,10 @@ function csvCell(value: string | number | boolean | null | undefined): string {
 async function exportGuildMembers(guild: Guild): Promise<{ attachment: Buffer; name: string; count: number }> {
   const members = await guild.members.fetch();
   const rows = [
-    ["id", "nom_utilisateur", "nom_global", "nom_affiche", "bot", "compte_cree", "arrivee_serveur", "roles"].map(csvCell).join(","),
+    ["id", "tag_discord", "nom_utilisateur", "nom_global", "nom_affiche", "bot", "compte_cree", "arrivee_serveur", "roles"].map(csvCell).join(","),
     ...members.map((member) => [
       member.id,
+      member.user.tag,
       member.user.username,
       member.user.globalName,
       member.displayName,
