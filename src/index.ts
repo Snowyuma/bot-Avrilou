@@ -32,6 +32,7 @@ const client = new Client({
 const recentJoins = new Map<string, number[]>();
 const lockedGuilds = new Set<string>();
 const recentMessages = new Map<string, Array<{ timestamp: number; message: Message }>>();
+const repeatedMessages = new Map<string, { content: string; count: number; messages: Message[] }>();
 async function banCleanupTarget(guild: Guild, targetId: string): Promise<boolean> {
   const existingBan = await guild.bans.fetch(targetId).catch(() => null);
   if (existingBan) return true;
@@ -163,6 +164,32 @@ async function exportActivityLogs(guild: Guild): Promise<{ files: Array<{ attach
       attachment: Buffer.from(part, "utf8"),
       name: `logs-${guild.id}-${date}${parts.length > 1 ? `-partie-${index + 1}` : ""}.txt`,
     })),
+  };
+}
+
+function csvCell(value: string | number | boolean | null | undefined): string {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+}
+
+async function exportGuildMembers(guild: Guild): Promise<{ attachment: Buffer; name: string; count: number }> {
+  const members = await guild.members.fetch();
+  const rows = [
+    ["id", "nom_utilisateur", "nom_global", "nom_affiche", "bot", "compte_cree", "arrivee_serveur", "roles"].map(csvCell).join(","),
+    ...members.map((member) => [
+      member.id,
+      member.user.username,
+      member.user.globalName,
+      member.displayName,
+      member.user.bot,
+      member.user.createdAt.toISOString(),
+      member.joinedAt?.toISOString() ?? "",
+      member.roles.cache.filter((role) => role.id !== guild.id).map((role) => `${role.name} (${role.id})`).join(" | "),
+    ].map(csvCell).join(",")),
+  ];
+  return {
+    attachment: Buffer.from(`\uFEFF${rows.join("\r\n")}`, "utf8"),
+    name: `membres-${guild.id}-${new Date().toISOString().slice(0, 10)}.csv`,
+    count: members.size,
   };
 }
 
@@ -705,6 +732,18 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
       files: exported.files,
     });
   }
+
+  if (interaction.commandName === "exportmembres") {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
+    }
+    await interaction.deferReply({ ephemeral: true });
+    const exported = await exportGuildMembers(interaction.guild);
+    return interaction.editReply({
+      content: `Export terminé : **${exported.count} membre(s)**. Le fichier est privé ; télécharge-le pour le conserver.`,
+      files: [{ attachment: exported.attachment, name: exported.name }],
+    });
+  }
 }
 
 client.once(Events.ClientReady, async (ready) => {
@@ -995,6 +1034,41 @@ client.on(Events.MessageCreate, async (message) => {
       );
     }
     return;
+  }
+
+  if (message.member && !message.member.permissions.has(PermissionFlagsBits.ManageMessages)) {
+    const duplicateKey = `${message.guild.id}:${message.author.id}`;
+    const exactContent = message.content.normalize("NFKC").trim();
+    if (exactContent) {
+      const previous = repeatedMessages.get(duplicateKey);
+      const repeated = previous?.content === exactContent
+        ? { content: exactContent, count: previous.count + 1, messages: [...previous.messages, message].slice(-5) }
+        : { content: exactContent, count: 1, messages: [message] };
+      repeatedMessages.set(duplicateKey, repeated);
+      if (repeated.count >= 5) {
+        repeatedMessages.delete(duplicateKey);
+        const timedOut = message.member.moderatable
+          ? await message.member.timeout(24 * 60 * 60_000, "5 messages identiques consécutifs")
+            .then(() => true)
+            .catch((error) => {
+              console.error(`Impossible d'exclure temporairement ${message.author.tag} pour messages répétés :`, error);
+              return false;
+            })
+          : false;
+        const deletedMessages = (await Promise.all(
+          repeated.messages.map((repeatedMessage) => repeatedMessage.delete().then(() => true).catch(() => false)),
+        )).filter(Boolean).length;
+        await activityLog(
+          message.guild,
+          timedOut ? "Messages répétés : membre exclu 24 heures" : "Messages répétés : exclusion impossible",
+          `Membre : ${message.author} (${message.author.tag} — ${message.author.id})\nDétection : **5 messages strictement identiques consécutifs**\nMessages supprimés : **${deletedMessages}/${repeated.messages.length}**\nContenu : ${clipped(exactContent, 1000)}\nSalon : <#${message.channelId}>`,
+          timedOut ? 0xef4444 : 0xf59e0b,
+        );
+        return;
+      }
+    } else {
+      repeatedMessages.delete(duplicateKey);
+    }
   }
 
   if (

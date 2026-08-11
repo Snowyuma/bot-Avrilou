@@ -95,6 +95,10 @@ export const commands = [
         .setName("export")
         .setDescription("Exporte l'historique du salon des logs dans des fichiers texte")
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+        .setName("exportmembres")
+        .setDescription("Exporte la liste des membres du serveur dans un fichier CSV")
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     {
         name: "Informations du compte",
         type: ApplicationCommandType.User,
