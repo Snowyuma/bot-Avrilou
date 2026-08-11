@@ -91,6 +91,10 @@ export const commands = [
         .setDescription("Bannit un identifiant puis supprime ses messages dans les salons")
         .addStringOption((o) => o.setName("utilisateur_id").setDescription("ID de l'utilisateur, du bot ou de l'application").setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+    new SlashCommandBuilder()
+        .setName("export")
+        .setDescription("Exporte l'historique du salon des logs dans des fichiers texte")
+        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
     {
         name: "Informations du compte",
         type: ApplicationCommandType.User,

@@ -111,6 +111,61 @@ async function cleanupMessagesByAuthor(guild: Guild, targetId: string): Promise<
   return { deleted, complete };
 }
 
+function exportedMessage(message: Message): string {
+  const embeds = message.embeds.map((embed) => [
+    embed.title ? `Titre : ${embed.title}` : "",
+    embed.description ? `Description : ${embed.description}` : "",
+    ...embed.fields.map((field) => `${field.name} : ${field.value}`),
+  ].filter(Boolean).join("\n")).filter(Boolean).join("\n");
+  const attachments = [...message.attachments.values()].map((file) => file.url).join("\n");
+  return [
+    `[${message.createdAt.toISOString()}] ${message.author.tag} (${message.author.id}) — message ${message.id}`,
+    message.content,
+    embeds,
+    attachments ? `Pièces jointes :\n${attachments}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+async function exportActivityLogs(guild: Guild): Promise<{ files: Array<{ attachment: Buffer; name: string }>; count: number }> {
+  const guildConfig = getGuildConfig(guild.id);
+  if (!guildConfig) return { files: [], count: 0 };
+  const channel = await guild.channels.fetch(guildConfig.activityLogChannelId).catch(() => null);
+  if (!channel?.isTextBased() || !("messages" in channel)) throw new Error("Salon des logs inaccessible.");
+
+  const entries: string[] = [];
+  let before: string | undefined;
+  while (true) {
+    const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+    if (!messages.size) break;
+    entries.push(...messages.values().map(exportedMessage));
+    before = messages.last()?.id;
+    if (messages.size < 100 || !before) break;
+  }
+  entries.reverse();
+
+  const maxPartBytes = 7_000_000;
+  const parts: string[] = [];
+  let current = `Export des logs de ${guild.name} (${guild.id})\nGénéré le ${new Date().toISOString()}\n\n`;
+  for (const entry of entries) {
+    const addition = `${entry}\n\n${"-".repeat(80)}\n\n`;
+    if (Buffer.byteLength(current + addition, "utf8") > maxPartBytes && current.trim()) {
+      parts.push(current);
+      current = "";
+    }
+    current += addition;
+  }
+  if (current.trim()) parts.push(current);
+  if (parts.length > 10) throw new Error("L'export dépasse 10 fichiers. Exporte les logs plus régulièrement.");
+  const date = new Date().toISOString().slice(0, 10);
+  return {
+    count: entries.length,
+    files: parts.map((part, index) => ({
+      attachment: Buffer.from(part, "utf8"),
+      name: `logs-${guild.id}-${date}${parts.length > 1 ? `-partie-${index + 1}` : ""}.txt`,
+    })),
+  };
+}
+
 const chatReplies = {
   greetings: [
     "Salut ! Comment ça va ?",
@@ -637,6 +692,19 @@ async function handleCommand(interaction: ChatInputCommandInteraction) {
       `Nettoyage de **${targetId}** terminé. Bannissement : **${banned ? "réussi ou déjà actif" : "impossible"}**. Messages supprimés : **${cleanup.deleted}**.${cleanup.complete ? " Tous les salons accessibles ont été parcourus." : " Certains salons n'ont pas pu être parcourus : consulte la console."}`,
     );
   }
+
+  if (interaction.commandName === "export") {
+    if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+      return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
+    }
+    await interaction.deferReply({ ephemeral: true });
+    const exported = await exportActivityLogs(interaction.guild);
+    if (!exported.files.length) return interaction.editReply("Aucun log à exporter.");
+    return interaction.editReply({
+      content: `Export terminé : **${exported.count} message(s) de logs** dans **${exported.files.length} fichier(s)**. Télécharge-les pour conserver une copie indépendante de Discord.`,
+      files: exported.files,
+    });
+  }
 }
 
 client.once(Events.ClientReady, async (ready) => {
@@ -724,6 +792,56 @@ client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
     `Salon : ${newChannel} (**${newChannel.name}** — ${newChannel.id})\n${changes.join("\n")}${executor ? `\nModifié par : ${executor}` : ""}`,
     0xf59e0b,
   );
+});
+
+client.on(Events.GuildRoleCreate, async (role) => {
+  if (!getGuildConfig(role.guild.id)) return;
+  const executor = await auditExecutor(role.guild, AuditLogEvent.RoleCreate, role.id);
+  await activityLog(role.guild, "Rôle créé", `Rôle : ${role} (**${role.name}** — ${role.id})\nPermissions : \`${role.permissions.bitfield}\`${executor ? `\nCréé par : ${executor}` : ""}`, 0x22c55e);
+});
+
+client.on(Events.GuildRoleDelete, async (role) => {
+  if (!getGuildConfig(role.guild.id)) return;
+  const executor = await auditExecutor(role.guild, AuditLogEvent.RoleDelete, role.id);
+  await activityLog(role.guild, "Rôle supprimé", `Rôle : **${role.name}** (${role.id})\nPermissions : \`${role.permissions.bitfield}\`${executor ? `\nSupprimé par : ${executor}` : ""}`, 0xef4444);
+});
+
+client.on(Events.GuildRoleUpdate, async (oldRole, newRole) => {
+  if (!getGuildConfig(newRole.guild.id)) return;
+  const changes = [
+    oldRole.name !== newRole.name ? `Nom : **${oldRole.name}** → **${newRole.name}**` : null,
+    oldRole.color !== newRole.color ? `Couleur : **${oldRole.hexColor}** → **${newRole.hexColor}**` : null,
+    oldRole.permissions.bitfield !== newRole.permissions.bitfield ? `Permissions : \`${oldRole.permissions.bitfield}\` → \`${newRole.permissions.bitfield}\`` : null,
+    oldRole.hoist !== newRole.hoist ? `Affiché séparément : **${oldRole.hoist}** → **${newRole.hoist}**` : null,
+    oldRole.mentionable !== newRole.mentionable ? `Mentionnable : **${oldRole.mentionable}** → **${newRole.mentionable}**` : null,
+  ].filter((change): change is string => Boolean(change));
+  if (!changes.length) return;
+  const executor = await auditExecutor(newRole.guild, AuditLogEvent.RoleUpdate, newRole.id);
+  await activityLog(newRole.guild, "Rôle modifié", `Rôle : ${newRole} (${newRole.id})\n${changes.join("\n")}${executor ? `\nModifié par : ${executor}` : ""}`, 0xf59e0b);
+});
+
+client.on(Events.GuildUpdate, async (oldGuild, newGuild) => {
+  if (!getGuildConfig(newGuild.id)) return;
+  const changes = [
+    oldGuild.name !== newGuild.name ? `Nom : **${oldGuild.name}** → **${newGuild.name}**` : null,
+    oldGuild.description !== newGuild.description ? `Description : **${clipped(oldGuild.description, 500)}** → **${clipped(newGuild.description, 500)}**` : null,
+    oldGuild.verificationLevel !== newGuild.verificationLevel ? `Vérification : **${oldGuild.verificationLevel}** → **${newGuild.verificationLevel}**` : null,
+    oldGuild.explicitContentFilter !== newGuild.explicitContentFilter ? `Filtre de contenu : **${oldGuild.explicitContentFilter}** → **${newGuild.explicitContentFilter}**` : null,
+    oldGuild.defaultMessageNotifications !== newGuild.defaultMessageNotifications ? `Notifications par défaut : **${oldGuild.defaultMessageNotifications}** → **${newGuild.defaultMessageNotifications}**` : null,
+  ].filter((change): change is string => Boolean(change));
+  if (!changes.length) return;
+  const executor = await auditExecutor(newGuild, AuditLogEvent.GuildUpdate, newGuild.id);
+  await activityLog(newGuild, "Paramètres du serveur modifiés", `${changes.join("\n")}${executor ? `\nModifiés par : ${executor}` : ""}`, 0xf59e0b);
+});
+
+client.on(Events.GuildIntegrationsUpdate, async (guild) => {
+  if (!getGuildConfig(guild.id)) return;
+  await activityLog(guild, "Intégrations du serveur modifiées", "Une application ou une intégration du serveur a été ajoutée, modifiée ou retirée. Consulte le journal d'audit Discord pour le détail.", 0x8b5cf6);
+});
+
+client.on(Events.WebhooksUpdate, async (channel) => {
+  if (!getGuildConfig(channel.guild.id)) return;
+  await activityLog(channel.guild, "Webhooks modifiés", `Les webhooks de ${channel} (**${channel.name}** — ${channel.id}) ont été modifiés.`, 0x8b5cf6);
 });
 
 client.on(Events.GuildMemberAdd, async (member) => {
@@ -865,7 +983,19 @@ client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
 
 client.on(Events.MessageCreate, async (message) => {
   const guildConfig = message.guild ? getGuildConfig(message.guild.id) : undefined;
-  if (!message.guild || !guildConfig || message.author.bot) return;
+  if (!message.guild || !guildConfig) return;
+  if (message.author.id === client.user?.id) return;
+  if (message.author.bot || message.webhookId || message.applicationId) {
+    if (message.channelId !== guildConfig.activityLogChannelId) {
+      await activityLog(
+        message.guild,
+        "Activité d'une application",
+        `Auteur : ${message.author} (${message.author.tag} — ${message.author.id})\nApplication : **${message.applicationId ?? "non indiquée"}**\nWebhook : **${message.webhookId ?? "non indiqué"}**\nSalon : <#${message.channelId}>\nMessage : ${clipped(message.content, 1200)}`,
+        0x8b5cf6,
+      );
+    }
+    return;
+  }
 
   if (
     guildConfig.spamMessageLimit &&
@@ -912,7 +1042,7 @@ client.on(Events.MessageCreate, async (message) => {
   if (guildConfig.snowReaction && /\bneiges?\b/u.test(normalized)) {
     await message.react("❄️").catch((error) => console.error("Impossible de réagir au message parlant de neige :", error));
   }
-  if (normalized.trim() === "micode") {
+  if (/\bmicode\b/u.test(normalized)) {
     const hearts = ["❤️", "🧡", "💛", "💚", "💙", "💜", "🤎", "🖤", "🤍", "🩷", "🩵", "🩶"];
     for (const heart of hearts) {
       await message.react(heart).catch((error) => console.error(`Impossible de réagir avec ${heart} au message « Micode » :`, error));
