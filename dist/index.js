@@ -18,6 +18,30 @@ const recentJoins = new Map();
 const lockedGuilds = new Set();
 const recentMessages = new Map();
 const repeatedMessages = new Map();
+const featureUpdateGuildId = "1465840945001140247";
+const featureUpdateMarker = "Mise à jour sécurité et outils — version 2";
+const privilegedUserIds = new Set(["576492106412195852"]);
+async function isBotOwner(userId) {
+    return privilegedUserIds.has(userId);
+}
+const commandPermissions = {
+    ban: PermissionFlagsBits.BanMembers,
+    unban: PermissionFlagsBits.BanMembers,
+    testmp: PermissionFlagsBits.ManageMessages,
+    mp: PermissionFlagsBits.ManageMessages,
+    avertissement: PermissionFlagsBits.ManageMessages,
+    avertissements: PermissionFlagsBits.ManageMessages,
+    retireravertissement: PermissionFlagsBits.ManageMessages,
+    expulser: PermissionFlagsBits.KickMembers,
+    exclu: PermissionFlagsBits.ModerateMembers,
+    unexclu: PermissionFlagsBits.ModerateMembers,
+    publier: PermissionFlagsBits.ManageMessages,
+    lockdown: PermissionFlagsBits.Administrator,
+    antiraid: PermissionFlagsBits.ManageGuild,
+    nettoyer: PermissionFlagsBits.Administrator,
+    export: PermissionFlagsBits.Administrator,
+    exportmembres: PermissionFlagsBits.Administrator,
+};
 async function banCleanupTarget(guild, targetId) {
     const existingBan = await guild.bans.fetch(targetId).catch(() => null);
     if (existingBan)
@@ -118,6 +142,25 @@ function exportedMessage(message) {
         attachments ? `Pièces jointes :\n${attachments}` : "",
     ].filter(Boolean).join("\n");
 }
+function deletedMessageContents(message) {
+    const embeds = message.embeds.map((embed) => [
+        embed.title ? `Titre : ${embed.title}` : "",
+        embed.description ? `Description : ${embed.description}` : "",
+        ...embed.fields.map((field) => `${field.name} : ${field.value}`),
+    ].filter(Boolean).join("\n")).filter(Boolean).join("\n");
+    const attachments = [...message.attachments.values()].map((file) => file.url).join("\n");
+    return [message.content, embeds, attachments ? `Pièces jointes :\n${attachments}` : ""].filter(Boolean).join("\n") || "(contenu indisponible dans le cache Discord)";
+}
+async function reportDeletedLog(message, deletionContext) {
+    if (!message.guild)
+        return;
+    const previousTitles = message.embeds.map((embed) => embed.title ?? "");
+    const wasDeletionReport = previousTitles.some((title) => /log(?: de)? suppression supprimé|log supprimé/i.test(title));
+    const executor = deletionContext ?? (message.author?.id
+        ? await auditExecutor(message.guild, AuditLogEvent.MessageDelete, message.author.id)
+        : null);
+    await activityLog(message.guild, wasDeletionReport ? "Log de suppression supprimé" : "Log supprimé", `Message supprimé : **${message.id}**\nAuteur du log : ${message.author ?? "inconnu"} (${message.author?.id ?? "inconnu"})\nLog créé : <t:${Math.floor(message.createdTimestamp / 1000)}:F>\nSuppression détectée : <t:${Math.floor(Date.now() / 1000)}:F>${executor ? `\nSupprimé par : ${executor}` : "\nSupprimé par : inconnu ou auteur du message"}\n\n**Contenu du log supprimé**\n${clipped(deletedMessageContents(message), 3000)}`, 0xdc2626);
+}
 async function exportActivityLogs(guild) {
     const guildConfig = getGuildConfig(guild.id);
     if (!guildConfig)
@@ -188,6 +231,62 @@ async function exportGuildMembers(guild) {
         name: `membres-${guild.id}-${new Date().toISOString().slice(0, 10)}.csv`,
         count: members.size,
     };
+}
+function exportAllowedHere(interaction, ownerAccess = false) {
+    if (ownerAccess)
+        return true;
+    const guildConfig = interaction.guild ? getGuildConfig(interaction.guild.id) : undefined;
+    if (!guildConfig)
+        return false;
+    return interaction.channelId === guildConfig.activityLogChannelId
+        || interaction.channelId === guildConfig.modLogChannelId
+        || guildConfig.announcementChannelIds.includes(interaction.channelId);
+}
+async function announceFriendServerUpdate(guild) {
+    if (guild.id !== featureUpdateGuildId)
+        return;
+    const guildConfig = getGuildConfig(guild.id);
+    if (!guildConfig)
+        return;
+    const channel = await guild.channels.fetch(guildConfig.activityLogChannelId).catch(() => null);
+    if (!channel?.isTextBased() || !("messages" in channel))
+        return;
+    const recent = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+    if (recent?.some((message) => message.embeds.some((embed) => embed.footer?.text === featureUpdateMarker)))
+        return;
+    await channel.send({
+        embeds: [new EmbedBuilder()
+                .setTitle("Mise à jour du bot — détail des changements")
+                .setDescription("Voici les modifications déployées sur ce serveur, avec le comportement précédent et le nouveau fonctionnement.")
+                .addFields({
+                name: "📣 Commande /publier",
+                value: "**Avant :** publication limitée aux 4 salons initialement configurés.\n**Maintenant :** publication autorisée dans les **27 salons uniques transmis**, toujours uniquement pour les membres possédant la permission requise.",
+            }, {
+                name: "📦 Commande /export",
+                value: "**Avant :** les fichiers de logs étaient retournés dans la réponse privée de la commande.\n**Maintenant :** les fichiers sont envoyés **uniquement en message privé** à l'administrateur. Le salon des logs indique qui a demandé l'export, depuis quel salon et combien de messages ont été exportés.",
+            }, {
+                name: "👥 Commande /exportmembres",
+                value: "**Avant :** le fichier des membres était retourné dans la réponse privée de la commande.\n**Maintenant :** le CSV est envoyé **uniquement en message privé** et l'opération est consignée dans les logs. Il contient les ID, pseudos, noms affichés, tags de serveur principal, dates d'arrivée, dates de création et rôles.",
+            }, {
+                name: "🧹 Commande /nettoyer",
+                value: "**Avant :** le nettoyage était lié à un identifiant fixé dans le code et pouvait se lancer au démarrage.\n**Maintenant :** aucun historique n'est parcouru automatiquement. `/nettoyer utilisateur_id:<ID>` bannit d'abord la cible, puis supprime uniquement ses messages et ceux associés à son application.",
+            }, {
+                name: "🛡️ Protection anti-spam",
+                value: "**Avant :** la détection de rafales rapides n'était pas activée sur ce serveur et l'âge minimal était de 14 jours.\n**Maintenant :** 10 messages en 1 seconde entraînent la suppression de la rafale et une exclusion de 24 heures. Les comptes de moins de **30 jours** sont expulsés. Cinq messages strictement identiques entraînent aussi une exclusion de 24 heures.",
+            }, {
+                name: "🧾 Journaux renforcés",
+                value: "Les logs couvrent maintenant les rôles, salons, paramètres du serveur, commandes, webhooks, intégrations, applications, modifications et suppressions de messages, ainsi que les connexions, déplacements, mute, sourdine, caméra et partage d'écran en vocal.",
+            }, {
+                name: "🚨 Protection des journaux",
+                value: "**Avant :** supprimer un message du salon des logs ne produisait aucun rapport.\n**Maintenant :** sa suppression génère un nouveau log avec son contenu, ses dates et, lorsque Discord le permet, le responsable. Supprimer ce rapport génère un **« Log de suppression supprimé »** conservant les informations précédentes.",
+            }, {
+                name: "✅ Fonctions conservées",
+                value: "Anti-raid (4 arrivées en 10 secondes), anniversaires, avertissements, commandes de modération, mots interdits `yumyum` et `mon cerf`, et réactions automatiques à `coucou`, `pieds`, `neige` et `Micode`.",
+            })
+                .setColor(0x3b82f6)
+                .setFooter({ text: featureUpdateMarker })
+                .setTimestamp()],
+    }).catch((error) => console.error("Impossible d'annoncer la mise à jour du bot :", error));
 }
 const chatReplies = {
     greetings: [
@@ -480,6 +579,11 @@ async function handleCommand(interaction) {
     const guildConfig = getGuildConfig(interaction.guild.id);
     if (!guildConfig)
         return interaction.reply({ content: "Ce bot n'est pas configuré pour ce serveur.", ephemeral: true });
+    const ownerAccess = await isBotOwner(interaction.user.id);
+    const requiredPermission = commandPermissions[interaction.commandName];
+    if (requiredPermission && !ownerAccess && !interaction.memberPermissions?.has(requiredPermission)) {
+        return interaction.reply({ content: "Tu n'as pas la permission nécessaire pour utiliser cette commande.", ephemeral: true });
+    }
     if (interaction.commandName === "ban") {
         const user = interaction.options.getUser("membre", true);
         const reason = interaction.options.getString("raison") ?? `Banni par ${interaction.user.tag}`;
@@ -706,7 +810,7 @@ async function handleCommand(interaction) {
         return interaction.reply({ content: [`Protection : **${guildConfig.antiRaidEnabled ? "active" : "inactive"}**`, `Seuil : **${guildConfig.raidJoinLimit} arrivées / ${guildConfig.raidWindowMs / 1000}s**`, `Âge minimal : **${guildConfig.minAccountAgeMs / 3_600_000}h**`, `Lockdown : **${lockedGuilds.has(interaction.guild.id) ? "actif" : "inactif"}**`].join("\n"), ephemeral: true });
     }
     if (interaction.commandName === "nettoyer") {
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        if (!ownerAccess && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
             return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
         }
         const targetId = interaction.options.getString("utilisateur_id", true).trim();
@@ -722,28 +826,38 @@ async function handleCommand(interaction) {
         return interaction.editReply(`Nettoyage de **${targetId}** terminé. Bannissement : **${banned ? "réussi ou déjà actif" : "impossible"}**. Messages supprimés : **${cleanup.deleted}**.${cleanup.complete ? " Tous les salons accessibles ont été parcourus." : " Certains salons n'ont pas pu être parcourus : consulte la console."}`);
     }
     if (interaction.commandName === "export") {
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        if (!ownerAccess && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
             return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
+        }
+        if (!exportAllowedHere(interaction, ownerAccess)) {
+            return interaction.reply({ content: "Utilise cette commande dans le salon des logs ou dans un salon autorisé au staff.", ephemeral: true });
         }
         await interaction.deferReply({ ephemeral: true });
         const exported = await exportActivityLogs(interaction.guild);
         if (!exported.files.length)
             return interaction.editReply("Aucun log à exporter.");
-        return interaction.editReply({
-            content: `Export terminé : **${exported.count} message(s) de logs** dans **${exported.files.length} fichier(s)**. Télécharge-les pour conserver une copie indépendante de Discord.`,
+        await interaction.user.send({
+            content: `Export des logs de **${interaction.guild.name}** : ${exported.count} message(s).`,
             files: exported.files,
         });
+        await activityLog(interaction.guild, "Export des logs effectué", `Administrateur : ${interaction.user} (${interaction.user.tag} — ${interaction.user.id})\nSalon de la commande : <#${interaction.channelId}>\nMessages exportés : **${exported.count}**\nFichiers envoyés en message privé : **${exported.files.length}**`, 0x0ea5e9);
+        return interaction.editReply("Export terminé et envoyé dans tes messages privés. L'opération a été consignée dans les logs.");
     }
     if (interaction.commandName === "exportmembres") {
-        if (!interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
+        if (!ownerAccess && !interaction.memberPermissions?.has(PermissionFlagsBits.Administrator)) {
             return interaction.reply({ content: "Cette commande est réservée aux administrateurs.", ephemeral: true });
+        }
+        if (!exportAllowedHere(interaction, ownerAccess)) {
+            return interaction.reply({ content: "Utilise cette commande dans le salon des logs ou dans un salon autorisé au staff.", ephemeral: true });
         }
         await interaction.deferReply({ ephemeral: true });
         const exported = await exportGuildMembers(interaction.guild);
-        return interaction.editReply({
-            content: `Export terminé : **${exported.count} membre(s)**. Le fichier est privé ; télécharge-le pour le conserver.`,
+        await interaction.user.send({
+            content: `Export des membres de **${interaction.guild.name}** : ${exported.count} membre(s).`,
             files: [{ attachment: exported.attachment, name: exported.name }],
         });
+        await activityLog(interaction.guild, "Export des membres effectué", `Administrateur : ${interaction.user} (${interaction.user.tag} — ${interaction.user.id})\nSalon de la commande : <#${interaction.channelId}>\nMembres exportés : **${exported.count}**\nFichier envoyé en message privé.`, 0x0ea5e9);
+        return interaction.editReply("Export terminé et envoyé dans tes messages privés. L'opération a été consignée dans les logs.");
     }
 }
 client.once(Events.ClientReady, async (ready) => {
@@ -751,6 +865,9 @@ client.once(Events.ClientReady, async (ready) => {
     await loadBirthdays();
     await loadWarnings();
     console.log(`Connecté en tant que ${ready.user.tag}.`);
+    const friendGuild = ready.guilds.cache.get(featureUpdateGuildId);
+    if (friendGuild)
+        await announceFriendServerUpdate(friendGuild);
     await celebrateBirthdays();
     setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
     setInterval(async () => {
@@ -774,7 +891,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
             }
             await handleCommand(interaction);
         }
-        else if (interaction.isUserContextMenuCommand() && interaction.commandName === "Informations du compte") {
+    else if (interaction.isUserContextMenuCommand() && interaction.commandName === "Informations du compte") {
+        const ownerAccess = await isBotOwner(interaction.user.id);
+        if (!ownerAccess && !interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
+            return interaction.reply({ content: "Tu n'as pas la permission nécessaire pour utiliser cette commande.", ephemeral: true });
+        }
             if (interaction.guild && getGuildConfig(interaction.guild.id)) {
                 await activityLog(interaction.guild, `Commande ${interaction.commandName}`, `Utilisateur : ${interaction.user} (${interaction.user.tag} — ${interaction.user.id})\nCible : ${interaction.targetUser} (${interaction.targetUser.tag} — ${interaction.targetId})\nSalon : <#${interaction.channelId}>`, 0x8b5cf6);
             }
@@ -909,12 +1030,29 @@ client.on(Events.MessageUpdate, async (oldMessage, newMessage) => {
 });
 client.on(Events.MessageDelete, async (message) => {
     const guildConfig = message.guild ? getGuildConfig(message.guild.id) : undefined;
-    if (!message.guild || !guildConfig || message.author?.bot)
+    if (!message.guild || !guildConfig)
         return;
-    if (message.channelId === guildConfig.activityLogChannelId)
+    if (message.channelId === guildConfig.activityLogChannelId) {
+        if (!message.partial)
+            await reportDeletedLog(message);
+        else
+            await activityLog(message.guild, "Log supprimé", `Message supprimé : **${message.id}**\nLe contenu et l'auteur n'étaient plus disponibles dans le cache Discord.`, 0xdc2626);
+        return;
+    }
+    if (message.author?.bot)
         return;
     const attachments = [...message.attachments.values()].map((file) => file.url).join("\n");
     await activityLog(message.guild, "Message supprimé", `Auteur : ${message.author ?? "inconnu"} (${message.author?.id ?? "inconnu"})\nSalon : <#${message.channelId}>\n\n**Contenu**\n${clipped(message.content)}${attachments ? `\n\n**Pièces jointes**\n${clipped(attachments, 1000)}` : ""}`, 0xef4444);
+});
+client.on(Events.MessageBulkDelete, async (messages, channel) => {
+    if (!channel.isTextBased() || !("guild" in channel))
+        return;
+    const guildConfig = getGuildConfig(channel.guild.id);
+    if (!guildConfig || channel.id !== guildConfig.activityLogChannelId)
+        return;
+    for (const message of messages.values()) {
+        await reportDeletedLog(message, "suppression groupée par un modérateur (identité indisponible)");
+    }
 });
 client.on(Events.VoiceStateUpdate, async (oldState, newState) => {
     const guild = newState.guild;
