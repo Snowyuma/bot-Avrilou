@@ -18,7 +18,7 @@ const recentJoins = new Map();
 const lockedGuilds = new Set();
 const recentMessages = new Map();
 const repeatedMessages = new Map();
-const featureUpdateGuildId = "1465840945001140247";
+const featureUpdateGuildIds = new Set(config.guilds.keys());
 const featureUpdateMarker = "Mise à jour sécurité et outils — version 2";
 const privilegedUserIds = new Set(["576492106412195852"]);
 async function isBotOwner(userId) {
@@ -242,12 +242,23 @@ function exportAllowedHere(interaction, ownerAccess = false) {
         || interaction.channelId === guildConfig.modLogChannelId
         || guildConfig.announcementChannelIds.includes(interaction.channelId);
 }
-async function announceFriendServerUpdate(guild) {
-    if (guild.id !== featureUpdateGuildId)
+async function announceServerUpdate(guild) {
+    if (!featureUpdateGuildIds.has(guild.id))
         return;
     const guildConfig = getGuildConfig(guild.id);
     if (!guildConfig)
         return;
+    const publishChannelCount = new Set(guildConfig.announcementChannelIds).size;
+    const birthdaySummary = guildConfig.birthdayChannelId && guildConfig.birthdayRegistrationChannelId
+        ? "anniversaires, "
+        : "";
+    const blockedWordsSummary = guildConfig.blockedWords.length
+        ? `mots interdits ${guildConfig.blockedWords.map((word) => `\`${word}\``).join(" et ")}, `
+        : "";
+    const reactionWords = ["`coucou`", "`pieds`", ...(guildConfig.snowReaction ? ["`neige`"] : []), "`Micode`"];
+    const spamSummary = guildConfig.spamMessageLimit && guildConfig.spamWindowMs && guildConfig.spamTimeoutMs
+        ? `**Maintenant :** ${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde entraînent la suppression de la rafale et une exclusion de ${formatDuration(guildConfig.spamTimeoutMs)}. ${guildConfig.kickYoungAccounts ? `Les comptes de moins de **${Math.floor(guildConfig.minAccountAgeMs / 86_400_000)} jours** sont expulsés. ` : ""}Cinq messages strictement identiques entraînent aussi une exclusion de 24 heures.`
+        : `**Maintenant :** cinq messages strictement identiques entraînent leur suppression et une exclusion de 24 heures. Les réglages anti-raid propres à ce serveur restent appliqués.`;
     const channel = await guild.channels.fetch(guildConfig.activityLogChannelId).catch(() => null);
     if (!channel?.isTextBased() || !("messages" in channel))
         return;
@@ -260,7 +271,7 @@ async function announceFriendServerUpdate(guild) {
                 .setDescription("Voici les modifications déployées sur ce serveur, avec le comportement précédent et le nouveau fonctionnement.")
                 .addFields({
                 name: "📣 Commande /publier",
-                value: "**Avant :** publication limitée aux 4 salons initialement configurés.\n**Maintenant :** publication autorisée dans les **27 salons uniques transmis**, toujours uniquement pour les membres possédant la permission requise.",
+                    value: `**Avant :** la publication restait limitée aux salons précédemment configurés.\n**Maintenant :** publication autorisée dans les **${publishChannelCount} salons configurés**, toujours uniquement pour les membres possédant la permission requise.`,
             }, {
                 name: "📦 Commande /export",
                 value: "**Avant :** les fichiers de logs étaient retournés dans la réponse privée de la commande.\n**Maintenant :** les fichiers sont envoyés **uniquement en message privé** à l'administrateur. Le salon des logs indique qui a demandé l'export, depuis quel salon et combien de messages ont été exportés.",
@@ -272,7 +283,7 @@ async function announceFriendServerUpdate(guild) {
                 value: "**Avant :** le nettoyage était lié à un identifiant fixé dans le code et pouvait se lancer au démarrage.\n**Maintenant :** aucun historique n'est parcouru automatiquement. `/nettoyer utilisateur_id:<ID>` bannit d'abord la cible, puis supprime uniquement ses messages et ceux associés à son application.",
             }, {
                 name: "🛡️ Protection anti-spam",
-                value: "**Avant :** la détection de rafales rapides n'était pas activée sur ce serveur et l'âge minimal était de 14 jours.\n**Maintenant :** 10 messages en 1 seconde entraînent la suppression de la rafale et une exclusion de 24 heures. Les comptes de moins de **30 jours** sont expulsés. Cinq messages strictement identiques entraînent aussi une exclusion de 24 heures.",
+                    value: `**Avant :** les protections ne couvraient pas l'ensemble de ces comportements.\n${spamSummary}`,
             }, {
                 name: "🧾 Journaux renforcés",
                 value: "Les logs couvrent maintenant les rôles, salons, paramètres du serveur, commandes, webhooks, intégrations, applications, modifications et suppressions de messages, ainsi que les connexions, déplacements, mute, sourdine, caméra et partage d'écran en vocal.",
@@ -281,7 +292,7 @@ async function announceFriendServerUpdate(guild) {
                 value: "**Avant :** supprimer un message du salon des logs ne produisait aucun rapport.\n**Maintenant :** sa suppression génère un nouveau log avec son contenu, ses dates et, lorsque Discord le permet, le responsable. Supprimer ce rapport génère un **« Log de suppression supprimé »** conservant les informations précédentes.",
             }, {
                 name: "✅ Fonctions conservées",
-                value: "Anti-raid (4 arrivées en 10 secondes), anniversaires, avertissements, commandes de modération, mots interdits `yumyum` et `mon cerf`, et réactions automatiques à `coucou`, `pieds`, `neige` et `Micode`.",
+                    value: `Anti-raid (${guildConfig.raidJoinLimit} arrivées en ${guildConfig.raidWindowMs / 1000} secondes), ${birthdaySummary}avertissements, commandes de modération, ${blockedWordsSummary}et réactions automatiques à ${reactionWords.join(", ")}.`,
             })
                 .setColor(0x3b82f6)
                 .setFooter({ text: featureUpdateMarker })
@@ -865,9 +876,11 @@ client.once(Events.ClientReady, async (ready) => {
     await loadBirthdays();
     await loadWarnings();
     console.log(`Connecté en tant que ${ready.user.tag}.`);
-    const friendGuild = ready.guilds.cache.get(featureUpdateGuildId);
-    if (friendGuild)
-        await announceFriendServerUpdate(friendGuild);
+    for (const guildId of featureUpdateGuildIds) {
+        const guild = ready.guilds.cache.get(guildId);
+        if (guild)
+            await announceServerUpdate(guild);
+    }
     await celebrateBirthdays();
     setInterval(() => void celebrateBirthdays().catch(console.error), 15 * 60_000);
     setInterval(async () => {
