@@ -18,6 +18,7 @@ const recentJoins = new Map();
 const lockedGuilds = new Set();
 const recentMessages = new Map();
 const repeatedMessages = new Map();
+const repeatedMessageWindowMs = 20_000;
 const featureUpdateGuildIds = new Set(config.guilds.keys());
 const featureUpdateMarker = "Mise à jour sécurité et outils — version 2";
 const privilegedUserIds = new Set(["576492106412195852"]);
@@ -257,8 +258,8 @@ async function announceServerUpdate(guild) {
         : "";
     const reactionWords = ["`coucou`", "`pieds`", ...(guildConfig.snowReaction ? ["`neige`"] : []), "`Micode`"];
     const spamSummary = guildConfig.spamMessageLimit && guildConfig.spamWindowMs && guildConfig.spamTimeoutMs
-        ? `**Maintenant :** ${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde entraînent la suppression de la rafale et une exclusion de ${formatDuration(guildConfig.spamTimeoutMs)}. ${guildConfig.kickYoungAccounts ? `Les comptes de moins de **${Math.floor(guildConfig.minAccountAgeMs / 86_400_000)} jours** sont expulsés. ` : ""}Cinq messages strictement identiques entraînent aussi une exclusion de 24 heures.`
-        : `**Maintenant :** cinq messages strictement identiques entraînent leur suppression et une exclusion de 24 heures. Les réglages anti-raid propres à ce serveur restent appliqués.`;
+        ? `**Maintenant :** ${guildConfig.spamMessageLimit} messages en ${guildConfig.spamWindowMs / 1000} seconde entraînent la suppression de la rafale et une exclusion de ${formatDuration(guildConfig.spamTimeoutMs)}. ${guildConfig.kickYoungAccounts ? `Les comptes de moins de **${Math.floor(guildConfig.minAccountAgeMs / 86_400_000)} jours** sont expulsés. ` : ""}Cinq messages strictement identiques en moins de 20 secondes entraînent aussi une exclusion de 24 heures.`
+        : `**Maintenant :** cinq messages strictement identiques en moins de 20 secondes entraînent leur suppression et une exclusion de 24 heures. Les réglages anti-raid propres à ce serveur restent appliqués.`;
     const channel = await guild.channels.fetch(guildConfig.activityLogChannelId).catch(() => null);
     if (!channel?.isTextBased() || !("messages" in channel))
         return;
@@ -1129,9 +1130,10 @@ client.on(Events.MessageCreate, async (message) => {
         const exactContent = message.content.normalize("NFKC").trim();
         if (exactContent) {
             const previous = repeatedMessages.get(duplicateKey);
-            const repeated = previous?.content === exactContent
-                ? { content: exactContent, count: previous.count + 1, messages: [...previous.messages, message].slice(-5) }
-                : { content: exactContent, count: 1, messages: [message] };
+            const now = Date.now();
+            const repeated = previous?.content === exactContent && now - previous.firstTimestamp <= repeatedMessageWindowMs
+                ? { content: exactContent, count: previous.count + 1, messages: [...previous.messages, message].slice(-5), firstTimestamp: previous.firstTimestamp }
+                : { content: exactContent, count: 1, messages: [message], firstTimestamp: now };
             repeatedMessages.set(duplicateKey, repeated);
             if (repeated.count >= 5) {
                 repeatedMessages.delete(duplicateKey);
@@ -1144,7 +1146,7 @@ client.on(Events.MessageCreate, async (message) => {
                     })
                     : false;
                 const deletedMessages = (await Promise.all(repeated.messages.map((repeatedMessage) => repeatedMessage.delete().then(() => true).catch(() => false)))).filter(Boolean).length;
-                await activityLog(message.guild, timedOut ? "Messages répétés : membre exclu 24 heures" : "Messages répétés : exclusion impossible", `Membre : ${message.author} (${message.author.tag} — ${message.author.id})\nDétection : **5 messages strictement identiques consécutifs**\nMessages supprimés : **${deletedMessages}/${repeated.messages.length}**\nContenu : ${clipped(exactContent, 1000)}\nSalon : <#${message.channelId}>`, timedOut ? 0xef4444 : 0xf59e0b);
+                await activityLog(message.guild, timedOut ? "Messages répétés : membre exclu 24 heures" : "Messages répétés : exclusion impossible", `Membre : ${message.author} (${message.author.tag} — ${message.author.id})\nDétection : **5 messages strictement identiques en moins de 20 secondes**\nMessages supprimés : **${deletedMessages}/${repeated.messages.length}**\nContenu : ${clipped(exactContent, 1000)}\nSalon : <#${message.channelId}>`, timedOut ? 0xef4444 : 0xf59e0b);
                 return;
             }
         }
