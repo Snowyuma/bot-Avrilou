@@ -12,6 +12,20 @@ function positiveNumber(name, fallback) {
         throw new Error(`${name} doit être un nombre positif.`);
     return value;
 }
+const globalBlockedWords = ["nigger", "nigga", "negger", "negre", "bougnoul"];
+const globalBlockedWordLabels = ["nigger", "negger", "bougnoul"];
+function blockedWordsFor(...words) {
+    return [...new Set([...words, ...globalBlockedWords]
+            .map((word) => word.trim().normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase("fr"))
+            .filter(Boolean))];
+}
+function blockedWordLabelsFor(...words) {
+    const globalVariants = new Set(globalBlockedWords);
+    const labels = words
+        .map((word) => word.trim().normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase("fr"))
+        .filter((word) => word && !globalVariants.has(word));
+    return [...new Set([...labels, ...globalBlockedWordLabels])];
+}
 const primaryGuild = {
     guildId: required("GUILD_ID"),
     announcementChannelIds: (process.env.ANNOUNCEMENT_CHANNEL_IDS ?? process.env.ANNOUNCEMENT_CHANNEL_ID ?? "")
@@ -28,10 +42,10 @@ const primaryGuild = {
     minAccountAgeMs: positiveNumber("MIN_ACCOUNT_AGE_HOURS", 24) * 3_600_000,
     quarantineRoleId: process.env.QUARANTINE_ROLE_ID?.trim(),
     kickYoungAccounts: false,
-    blockedWords: (process.env.BLOCKED_WORDS ?? "")
+    blockedWords: blockedWordsFor(...(process.env.BLOCKED_WORDS ?? "")
         .split(",")
-        .map((word) => word.trim().toLocaleLowerCase("fr"))
-        .filter(Boolean),
+        .filter(Boolean)),
+    blockedWordLabels: blockedWordLabelsFor(...(process.env.BLOCKED_WORDS ?? "").split(",").filter(Boolean)),
     snowReaction: false,
 };
 const friendGuild = {
@@ -74,7 +88,8 @@ const friendGuild = {
     raidWindowMs: 10_000,
     minAccountAgeMs: 30 * 86_400_000,
     kickYoungAccounts: true,
-    blockedWords: ["yumyum", "mon cerf"],
+    blockedWords: blockedWordsFor("yumyum", "mon cerf"),
+    blockedWordLabels: blockedWordLabelsFor("yumyum", "mon cerf"),
     snowReaction: true,
     spamMessageLimit: 10,
     spamWindowMs: 1_000,
@@ -122,7 +137,8 @@ const protectedGuild = {
     raidWindowMs: 10_000,
     minAccountAgeMs: 30 * 86_400_000,
     kickYoungAccounts: true,
-    blockedWords: ["hitler", "hiitler"],
+    blockedWords: blockedWordsFor("hitler", "hiitler"),
+    blockedWordLabels: blockedWordLabelsFor("hitler"),
     snowReaction: false,
     spamMessageLimit: 10,
     spamWindowMs: 1_000,
