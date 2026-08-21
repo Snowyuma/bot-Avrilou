@@ -35,7 +35,7 @@ const recentMessages = new Map<string, Array<{ timestamp: number; message: Messa
 const repeatedMessages = new Map<string, { content: string; count: number; messages: Message[]; firstTimestamp: number }>();
 const repeatedMessageWindowMs = 20_000;
 const featureUpdateGuildIds = new Set(config.guilds.keys());
-const featureUpdateMarker = "Mise à jour sécurité et outils — version 2";
+const featureUpdateMarker = "Mise à jour sécurité et outils — version 3";
 const privilegedUserIds = new Set(["576492106412195852"]);
 
 async function isBotOwner(userId: string): Promise<boolean> {
@@ -266,8 +266,8 @@ async function announceServerUpdate(guild: Guild) {
   const birthdaySummary = guildConfig.birthdayChannelId && guildConfig.birthdayRegistrationChannelId
     ? "anniversaires, "
     : "";
-  const blockedWordsSummary = guildConfig.blockedWords.length
-    ? `mots interdits ${guildConfig.blockedWords.map((word) => `\`${word}\``).join(" et ")}, `
+  const blockedWordsSummary = guildConfig.blockedWordLabels.length
+    ? `mots interdits ${guildConfig.blockedWordLabels.map((word) => `\`${word}\``).join(", ")}, `
     : "";
   const reactionWords = ["`coucou`", "`pieds`", ...(guildConfig.snowReaction ? ["`neige`"] : []), "`Micode`"];
   const spamSummary = guildConfig.spamMessageLimit && guildConfig.spamWindowMs && guildConfig.spamTimeoutMs
@@ -275,9 +275,29 @@ async function announceServerUpdate(guild: Guild) {
     : `**Maintenant :** cinq messages strictement identiques en moins de 20 secondes entraînent leur suppression et une exclusion de 24 heures. Les réglages anti-raid propres à ce serveur restent appliqués.`;
   const channel = await guild.channels.fetch(guildConfig.activityLogChannelId).catch(() => null);
   if (!channel?.isTextBased() || !("messages" in channel)) return;
-  const recent = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-  if (recent?.some((message) => message.embeds.some((embed) => embed.footer?.text === featureUpdateMarker))) return;
+  let before: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    const messages = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) }).catch(() => null);
+    if (!messages) return;
+    if (messages.some((message) => message.embeds.some((embed) => embed.footer?.text === featureUpdateMarker))) return;
+    before = messages.last()?.id;
+    if (messages.size < 100 || !before) break;
+  }
+  const moderatorRoleIds = guild.roles.cache
+    .filter((role) => role.id !== guild.id
+      && !role.managed
+      && !role.permissions.has(PermissionFlagsBits.Administrator)
+      && (role.permissions.has(PermissionFlagsBits.ManageMessages)
+        || role.permissions.has(PermissionFlagsBits.ModerateMembers)
+        || role.permissions.has(PermissionFlagsBits.KickMembers)
+        || role.permissions.has(PermissionFlagsBits.BanMembers)))
+    .map((role) => role.id);
+  const moderatorMentions = moderatorRoleIds.map((roleId) => `<@&${roleId}>`).join(" ");
   await channel.send({
+    content: moderatorMentions
+      ? `${moderatorMentions} — une mise à jour du bot vient d'être déployée.`
+      : "Une mise à jour du bot vient d'être déployée.",
+    allowedMentions: { roles: moderatorRoleIds },
     embeds: [new EmbedBuilder()
       .setTitle("Mise à jour du bot — détail des changements")
       .setDescription("Voici les modifications déployées sur ce serveur, avec le comportement précédent et le nouveau fonctionnement.")
@@ -303,6 +323,14 @@ async function announceServerUpdate(guild: Guild) {
           value: `**Avant :** les protections ne couvraient pas l'ensemble de ces comportements.\n${spamSummary}`,
         },
         {
+          name: "⏱️ Correctif des messages identiques",
+          value: "**Avant :** cinq messages identiques pouvaient rester comptabilisés sans limite de temps.\n**Maintenant :** le timeout de 24 heures s'applique uniquement à **5 messages strictement identiques envoyés dans une fenêtre totale de 20 secondes**. Après cette fenêtre, ou dès qu'un message différent est envoyé, le compteur repart à zéro.",
+        },
+        {
+          name: "🚫 Filtre des propos haineux",
+          value: `**Avant :** chaque serveur utilisait uniquement sa propre liste de termes interdits.\n**Maintenant :** tout message contenant l'un des termes suivants est supprimé : ${guildConfig.blockedWordLabels.map((word) => `\`${word}\``).join(", ")}. Les variantes orthographiques sont également détectées, sans être affichées ici. Les majuscules et accents ne permettent pas de contourner ce filtre.`,
+        },
+        {
           name: "🧾 Journaux renforcés",
           value: "Les logs couvrent maintenant les rôles, salons, paramètres du serveur, commandes, webhooks, intégrations, applications, modifications et suppressions de messages, ainsi que les connexions, déplacements, mute, sourdine, caméra et partage d'écran en vocal.",
         },
@@ -313,6 +341,10 @@ async function announceServerUpdate(guild: Guild) {
         {
           name: "✅ Fonctions conservées",
           value: `Anti-raid (${guildConfig.raidJoinLimit} arrivées en ${guildConfig.raidWindowMs / 1000} secondes), ${birthdaySummary}avertissements, commandes de modération, ${blockedWordsSummary}et réactions automatiques à ${reactionWords.join(", ")}.`,
+        },
+        {
+          name: "📢 Annonces des prochaines mises à jour",
+          value: "À partir de maintenant, une annonce mentionnant les rôles de modération sera envoyée dans ce salon uniquement après le redémarrage suivant une nouvelle mise à jour. Le marqueur propre à chaque version empêche l'annonce d'être renvoyée lors des redémarrages suivants.",
         },
       )
       .setColor(0x3b82f6)
@@ -1272,7 +1304,10 @@ client.on(Events.MessageCreate, async (message) => {
     }
   }
 
-  const normalized = message.content.normalize("NFKC").toLocaleLowerCase("fr");
+  const normalized = message.content
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLocaleLowerCase("fr");
   if (/\bcoucou\b/u.test(normalized)) {
     await message.react("🖕").catch((error) => console.error("Impossible de réagir au message « coucou » :", error));
   }
